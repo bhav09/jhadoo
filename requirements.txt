@@ -1,0 +1,13 @@
+# Core dependencies (none required for basic functionality)
+
+# Optional dependencies
+win10toast>=0.9; platform_system=="Windows"  # For Windows notifications
+
+# Development dependencies
+pytest>=7.0
+pytest-cov>=4.0
+black>=23.0
+flake8>=6.0
+mypy>=1.0
+
+
