@@ -4,6 +4,7 @@ import sys
 import platform
 import subprocess
 from typing import Optional
+import shutil
 
 
 class Scheduler:
@@ -13,10 +14,18 @@ class Scheduler:
         self.system = platform.system().lower()
         self.jhadoo_path = self._get_jhadoo_path()
     
-    def _get_jhadoo_path(self) -> str:
-        """Get path to jhadoo executable."""
-        result = subprocess.run(['which', 'jhadoo'], capture_output=True, text=True)
-        return result.stdout.strip() if result.returncode == 0 else f"{sys.executable} -m jhadoo"
+    # def _get_jhadoo_path(self) -> str:
+    #     """Get path to jhadoo executable."""
+    #     result = subprocess.run(['which', 'jhadoo'], capture_output=True, text=True)
+    #     return result.stdout.strip() if result.returncode == 0 else f"{sys.executable} -m jhadoo"
+
+    def _get_jhadoo_path(self):
+        """Return path to jhadoo executable in a cross-platform way."""
+        jhadoo_path = shutil.which("jhadoo")
+        if jhadoo_path:
+            return jhadoo_path.strip()
+        else:
+            return f'"{sys.executable}" -m jhadoo'  # Fall back to running the module directly via Python
     
     def schedule(self, frequency: str, config_path: Optional[str] = None, 
                  dry_run: bool = False, archive: bool = False) -> bool:
