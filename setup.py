@@ -9,7 +9,7 @@ long_description = (this_directory / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="jhadoo",
-    version="1.1.0",
+    version="1.2.0",
     author="Bhavishya",
     author_email="your.email@example.com",  # Update with your email
     description="Smart cleanup tool for developers - removes unused venv, node_modules, Docker images, scans Git repos, and more",

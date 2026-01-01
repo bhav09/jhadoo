@@ -24,6 +24,7 @@ from .utils import (
 from .notifications import notify_completion, notify_error, notify_dry_run_complete
 from .git_tools import GitAnalyzer
 from .docker_tools import DockerCleaner
+from .telemetry import TelemetryClient
 
 # Configure logging
 logging.basicConfig(
@@ -47,6 +48,7 @@ class CleanupEngine:
         self.config = config
         self.dry_run = dry_run or config.get("safety", {}).get("dry_run", False)
         self.archive_mode = archive_mode or config.get("safety", {}).get("backup_mode", False)
+        self.telemetry = TelemetryClient(config)
         self.deleted_items: List[Dict[str, Any]] = []
         self.stats = {
             "folders_deleted": 0,
@@ -537,6 +539,15 @@ class CleanupEngine:
             
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
+            
+            # Send anonymous telemetry
+            if not self.dry_run:
+                try:
+                    total_bytes = folders_size + bin_size
+                    if total_bytes > 0:
+                        self.telemetry.send_stats(total_bytes, duration)
+                except Exception:
+                    pass # Never fail due to telemetry
             
             logger.info(f"\n{'='*60}")
             logger.info(f"✅ Cleanup completed in {duration:.1f} seconds")

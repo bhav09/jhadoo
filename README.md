@@ -28,8 +28,17 @@ jhadoo --restore
 
 # Schedule daily cleanup
 jhadoo --schedule daily --archive
+```
 
-# View stats
+## Privacy & Telemetry (New in v1.2.0)
+Jhadoo collects **anonymous** usage statistics to global storage savings.
+- **What we collect**: Randomly generated User ID, bytes saved, OS type, and Jhadoo version.
+- **What we DO NOT collect**: IP addresses, file names, paths, or any personal data.
+- **Opt-out**: Run `jhadoo --telemetry-off` at any time.
+
+## Dashboard
+View your personal savings and trends:
+```bash
 jhadoo --dashboard
 ```
 

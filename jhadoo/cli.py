@@ -247,9 +247,27 @@ Examples:
     )
     
     parser.add_argument(
+        '--telemetry-status',
+        action='store_true',
+        help='Check if anonymous telemetry is enabled'
+    )
+
+    parser.add_argument(
+        '--telemetry-on',
+        action='store_true',
+        help='Enable anonymous usage statistics'
+    )
+
+    parser.add_argument(
+        '--telemetry-off',
+        action='store_true',
+        help='Disable anonymous usage statistics'
+    )
+    
+    parser.add_argument(
         '--version', '-v',
         action='version',
-        version='%(prog)s 1.0.0'
+        version='%(prog)s 1.2.0'
     )
     
     args = parser.parse_args()
@@ -257,6 +275,28 @@ Examples:
     # Handle config generation
     if args.generate_config:
         generate_sample_config(args.config_output)
+        return 0
+    
+    # Load configuration first for telemetry checks
+    config = Config(args.config)
+    
+    # Handle telemetry commands
+    if args.telemetry_status:
+        status = "ENABLED" if config.get("telemetry", {}).get("enabled", True) else "DISABLED"
+        print(f"Anonymous Telemetry: {status}")
+        print(f"User ID: {config.get('telemetry', {}).get('user_id', 'Not generated yet')}")
+        return 0
+        
+    if args.telemetry_on:
+        config.set("telemetry", {"enabled": True})
+        config.save_to_file(args.config or "jhadoo_config.json")
+        print("✅ Anonymous telemetry enabled. Thank you for contributing!")
+        return 0
+        
+    if args.telemetry_off:
+        config.set("telemetry", {"enabled": False})
+        config.save_to_file(args.config or "jhadoo_config.json")
+        print("✅ Anonymous telemetry disabled.")
         return 0
     
     # Handle scheduling operations

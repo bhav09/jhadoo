@@ -82,6 +82,10 @@ class Config:
         "docker": {
             "enabled": True,
             "unused_image_days": 60
+        },
+        "telemetry": {
+            "enabled": True,
+            "url": "https://your-cloud-function-url.cloudfunctions.net/jhadoo-telemetry"
         }
     }
     
