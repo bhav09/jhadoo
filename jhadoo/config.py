@@ -70,7 +70,18 @@ class Config:
         },
         "logging": {
             "log_file": None,  # Will be set to script directory
-            "manifest_file": None  # Will be set to script directory
+            "manifest_file": None,  # Will be set to script directory
+            "level": "INFO"
+        },
+        "git": {
+            "enabled": True,
+            "check_stale_branches": True,
+            "check_large_files": True,
+            "large_file_threshold_mb": 50
+        },
+        "docker": {
+            "enabled": True,
+            "unused_image_days": 60
         }
     }
     

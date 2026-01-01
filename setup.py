@@ -9,10 +9,10 @@ long_description = (this_directory / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="jhadoo",
-    version="1.0.1",
+    version="1.1.0",
     author="Bhavishya",
     author_email="your.email@example.com",  # Update with your email
-    description="Smart cleanup tool for any files/folders - automatically removes unused venv, node_modules, build dirs, cache, and more",
+    description="Smart cleanup tool for developers - removes unused venv, node_modules, Docker images, scans Git repos, and more",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/yourusername/jhadoo",  # Update with your GitHub URL

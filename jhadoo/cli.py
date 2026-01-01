@@ -158,6 +158,9 @@ Examples:
   jhadoo                    Run cleanup with default settings
   jhadoo --dry-run          Preview what would be deleted
   jhadoo --archive          Move files to archive instead of deleting
+  jhadoo --restore          Restore items from last archive run
+  jhadoo --git-check        Analyze Git repositories for health
+  jhadoo --docker           Include Docker image cleanup
   jhadoo --dashboard        Show statistics and trends
   jhadoo --config my.json   Use custom configuration file
   jhadoo --generate-config  Create a sample config file
@@ -226,6 +229,24 @@ Examples:
     )
     
     parser.add_argument(
+        '--restore',
+        action='store_true',
+        help='Restore items deleted in the last run (requires --archive to have been used)'
+    )
+    
+    parser.add_argument(
+        '--docker',
+        action='store_true',
+        help='Enable Docker image cleanup (unused > 60 days)'
+    )
+    
+    parser.add_argument(
+        '--git-check',
+        action='store_true',
+        help='Run Git repository health analysis'
+    )
+    
+    parser.add_argument(
         '--version', '-v',
         action='version',
         version='%(prog)s 1.0.0'
@@ -262,10 +283,32 @@ Examples:
     # Load configuration
     config = Config(args.config)
     
+    # Init logging
+    import logging
+    logging.basicConfig(level=getattr(logging, config.get("logging", {}).get("level", "INFO")))
+    
+    # Handle restore operation
+    if args.restore:
+        from .restore import JobRestorer
+        restorer = JobRestorer(config)
+        restorer.restore_all()
+        return 0
+    
     # Handle dashboard
     if args.dashboard:
         show_dashboard(config)
         return 0
+    
+    # Update config with CLI flags
+    if args.docker:
+        config.set("docker", {"enabled": True})
+        
+    if args.git_check:
+        config.set("git", {"enabled": True})
+        # Disable other cleanups if only checking git? 
+        # For now let's allow mixing, but maybe user wants JUST git check.
+        # If user explicitly asks for git check, maybe we should prioritize it or run it standalone?
+        # The current design runs it as part of CleanupEngine.run()
     
     # Run cleanup
     engine = CleanupEngine(

@@ -14,11 +14,17 @@ pip install jhadoo
 # Preview (safe)
 jhadoo --dry-run
 
-# Run cleanup
+# Run standard cleanup (folders)
 jhadoo
 
-# Archive mode (safer)
-jhadoo --archive
+# Run with Docker cleanup
+jhadoo --docker
+
+# Analyze Git Repositories
+jhadoo --git-check
+
+# Restore archived items
+jhadoo --restore
 
 # Schedule daily cleanup
 jhadoo --schedule daily --archive
@@ -30,6 +36,9 @@ jhadoo --dashboard
 ## Features
 
 - **Universal**: Works with ANY file/folder name (venv, node_modules, build, dist, target, or custom)
+- **New! Git Analysis**: Detects stale branches and large files in your git repositories
+- **New! Docker Cleanup**: Automatically cleans up unused Docker images (>60 days old)
+- **New! Undo/Restore**: Instantly restore archived items to their original location
 - **Safe**: Dry-run mode, size caps, confirmations, archive mode
 - **Scheduled**: Built-in cron/Task Scheduler integration
 - **Cross-platform**: macOS, Windows, Linux

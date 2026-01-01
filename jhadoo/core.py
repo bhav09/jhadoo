@@ -4,6 +4,7 @@ import os
 import shutil
 import csv
 import json
+import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Tuple, Optional
@@ -21,6 +22,15 @@ from .utils import (
     is_protected_path
 )
 from .notifications import notify_completion, notify_error, notify_dry_run_complete
+from .git_tools import GitAnalyzer
+from .docker_tools import DockerCleaner
+
+# Configure logging
+logging.basicConfig(
+    format='%(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 
 class CleanupEngine:
@@ -62,7 +72,7 @@ class CleanupEngine:
                             except:
                                 pass  # Skip files we can't access
         except Exception as e:
-            print(f"Error calculating size for {path}: {e}")
+            logger.debug(f"Error calculating size for {path}: {e}")
         return total_size
     
     def get_last_modified_time(self, folder_path: str) -> datetime:
@@ -94,13 +104,13 @@ class CleanupEngine:
         candidates = []
         exclusions = self.config.get("exclusions", [])
         
-        print(f"\n🔍 Scanning {main_folder} for '{target_name}' folders...")
+        logger.info(f"\n🔍 Scanning {main_folder} for '{target_name}' folders...")
         
         # First pass: count directories for progress bar
         total_dirs = sum(1 for _, dirs, _ in os.walk(main_folder) if target_name in dirs)
         
         if total_dirs == 0:
-            print(f"No '{target_name}' folders found.")
+            logger.info(f"No '{target_name}' folders found.")
             return candidates
         
         progress = ProgressBar(total_dirs, prefix=f"Scanning '{target_name}'", width=40)
@@ -136,7 +146,7 @@ class CleanupEngine:
                     progress.update(suffix="(too recent)")
         
         progress.finish()
-        print(f"✓ Found {len(candidates)} '{target_name}' folders eligible for cleanup")
+        logger.info(f"✓ Found {len(candidates)} '{target_name}' folders eligible for cleanup")
         
         return candidates
     
@@ -151,7 +161,7 @@ class CleanupEngine:
         # Validate safety
         is_safe, error_msg = validate_path_safety(path)
         if not is_safe:
-            print(f"⚠️  Skipped unsafe path: {error_msg}")
+            logger.warning(f"⚠️  Skipped unsafe path: {error_msg}")
             self.stats["errors"].append(error_msg)
             return False
         
@@ -168,19 +178,19 @@ class CleanupEngine:
                 
                 shutil.move(path, archive_path)
                 item["archived_to"] = archive_path
-                print(f"📦 Archived: {path} → {archive_path}")
+                logger.info(f"📦 Archived: {path} → {archive_path}")
             else:
                 # Permanently delete
                 if os.path.isfile(path):
                     os.remove(path)
                 elif os.path.isdir(path):
                     shutil.rmtree(path)
-                print(f"🗑️  Deleted: {path} ({bytes_to_human_readable(item['size'])})")
+                logger.info(f"🗑️  Deleted: {path} ({bytes_to_human_readable(item['size'])})")
             
             return True
         except Exception as e:
             error_msg = f"Failed to process {path}: {e}"
-            print(f"❌ {error_msg}")
+            logger.error(f"❌ {error_msg}")
             self.stats["errors"].append(error_msg)
             return False
     
@@ -204,7 +214,7 @@ class CleanupEngine:
             all_candidates.extend(candidates)
         
         if not all_candidates:
-            print("\n✓ No folders to clean up!")
+            logger.info("\n✓ No folders to clean up!")
             return 0
         
         # Calculate total size
@@ -218,20 +228,20 @@ class CleanupEngine:
         )
         
         if exceeds_threshold:
-            print(f"\n{warning_msg}")
+            logger.warning(f"\n{warning_msg}")
         
         # Show summary
-        print(f"\n📊 Summary:")
-        print(f"   Items to process: {len(all_candidates)}")
-        print(f"   Total size: {bytes_to_human_readable(total_size)}")
-        print(f"   Mode: {'DRY RUN' if self.dry_run else ('ARCHIVE' if self.archive_mode else 'DELETE')}")
+        logger.info(f"\n📊 Summary:")
+        logger.info(f"   Items to process: {len(all_candidates)}")
+        logger.info(f"   Total size: {bytes_to_human_readable(total_size)}")
+        logger.info(f"   Mode: {'DRY RUN' if self.dry_run else ('ARCHIVE' if self.archive_mode else 'DELETE')}")
         
         if self.dry_run:
-            print(f"\n{'='*60}")
-            print("DRY RUN - No actual deletions will be performed")
-            print(f"{'='*60}")
+            logger.info(f"\n{'='*60}")
+            logger.info("DRY RUN - No actual deletions will be performed")
+            logger.info(f"{'='*60}")
             for item in all_candidates:
-                print(f"  Would delete: {item['path']} ({bytes_to_human_readable(item['size'])})")
+                logger.info(f"  Would delete: {item['path']} ({bytes_to_human_readable(item['size'])})")
             
             if self.config.get("notifications", {}).get("enabled"):
                 notify_dry_run_complete(len(all_candidates), total_size / (1024 * 1024))
@@ -246,11 +256,11 @@ class CleanupEngine:
                 f"{len(all_candidates)} items ({bytes_to_human_readable(total_size)}). Continue?",
                 default=False
             ):
-                print("❌ Operation cancelled by user.")
+                logger.info("❌ Operation cancelled by user.")
                 return 0
         
         # Perform cleanup
-        print(f"\n{'🚀 Starting cleanup...'}")
+        logger.info(f"\n{'🚀 Starting cleanup...'}")
         progress = ProgressBar(len(all_candidates), prefix="Processing", width=40)
         
         successful = 0
@@ -264,10 +274,10 @@ class CleanupEngine:
         
         progress.finish()
         
-        print(f"\n✅ Cleanup complete!")
-        print(f"   Successfully processed: {successful}/{len(all_candidates)}")
+        logger.info(f"\n✅ Cleanup complete!")
+        logger.info(f"   Successfully processed: {successful}/{len(all_candidates)}")
         if self.stats["errors"]:
-            print(f"   Errors: {len(self.stats['errors'])}")
+            logger.info(f"   Errors: {len(self.stats['errors'])}")
         
         return self.stats["folders_size"]
     
@@ -280,21 +290,21 @@ class CleanupEngine:
         bin_folder = self.config.get("bin_folder")
         
         if not os.path.exists(bin_folder):
-            print(f"\n📁 Bin folder not found: {bin_folder}")
-            print("Creating bin folder for future use...")
+            logger.info(f"\n📁 Bin folder not found: {bin_folder}")
+            logger.info("Creating bin folder for future use...")
             try:
                 os.makedirs(bin_folder, exist_ok=True)
-                print(f"✓ Created: {bin_folder}")
+                logger.info(f"✓ Created: {bin_folder}")
             except Exception as e:
-                print(f"❌ Could not create bin folder: {e}")
+                logger.error(f"❌ Could not create bin folder: {e}")
             return 0
         
-        print(f"\n🗑️  Cleaning bin folder: {bin_folder}")
+        logger.info(f"\n🗑️  Cleaning bin folder: {bin_folder}")
         
         try:
             items = os.listdir(bin_folder)
             if not items:
-                print("✓ Bin folder is already empty")
+                logger.info("✓ Bin folder is already empty")
                 return 0
             
             # Calculate total size first
@@ -304,7 +314,7 @@ class CleanupEngine:
                 total_size += self.get_size(item_path)
             
             if self.dry_run:
-                print(f"DRY RUN: Would delete {len(items)} items ({bytes_to_human_readable(total_size)})")
+                logger.info(f"DRY RUN: Would delete {len(items)} items ({bytes_to_human_readable(total_size)})")
                 return 0
             
             # Delete items
@@ -329,18 +339,82 @@ class CleanupEngine:
                     progress.update(suffix="(error)")
             
             progress.finish()
-            print(f"✅ Bin cleanup complete: {self.stats['bin_deleted']} items, "
+            logger.info(f"✅ Bin cleanup complete: {self.stats['bin_deleted']} items, "
                   f"{bytes_to_human_readable(self.stats['bin_size'])}")
             
         except PermissionError:
-            print("❌ Permission denied: Cannot access bin folder")
-            print("Note: Some system trash folders have restricted access.")
+            logger.error("❌ Permission denied: Cannot access bin folder")
+            logger.error("Note: Some system trash folders have restricted access.")
             return 0
         except Exception as e:
-            print(f"❌ Error accessing bin folder: {e}")
+            logger.error(f"❌ Error accessing bin folder: {e}")
             return 0
         
         return self.stats["bin_size"]
+
+    def analyze_git_repositories(self):
+        """Analyze git repositories for health issues."""
+        if not self.config.get("git", {}).get("enabled", True):
+            return
+
+        logger.info(f"\n🌿 Analyzing Git repositories in {self.config.get('main_folder')}...")
+        main_folder = self.config.get("main_folder")
+        found_repos = False
+        
+        for root, dirs, _ in os.walk(main_folder):
+            if '.git' in dirs:
+                found_repos = True
+                analyzer = GitAnalyzer(root)
+                health = analyzer.check_health()
+                
+                # Report findings
+                stale = health.get("stale_branches", [])
+                large = health.get("large_files", [])
+                
+                if stale or large:
+                    logger.info(f"\nRepo: {root}")
+                    if stale:
+                        logger.info(f"  ⚠️  {len(stale)} stale branches found (merged into main/master)")
+                        for b in stale[:3]: # Show first 3
+                            logger.info(f"     - {b['name']} (last commit: {b['last_commit']})")
+                        if len(stale) > 3:
+                            logger.info(f"     ...and {len(stale)-3} more")
+                            
+                    if large:
+                        logger.info(f"  ⚠️  {len(large)} large files found")
+                        for f in large[:3]:
+                            logger.info(f"     - {f['rel_path']} ({f['size_mb']:.1f} MB)")
+
+        if not found_repos:
+            logger.info("No git repositories found.")
+
+    def cleanup_docker(self):
+        """Cleanup unused docker images."""
+        if not self.config.get("docker", {}).get("enabled", True):
+            return
+            
+        cleaner = DockerCleaner()
+        if not cleaner.is_docker_available():
+            return
+            
+        days = self.config.get("docker", {}).get("unused_image_days", 60)
+        logger.info(f"\n🐳 Checking for Docker images unused for >{days} days...")
+        
+        unused = cleaner.find_unused_images(days_threshold=days)
+        if not unused:
+            logger.info("✓ No old unused images found.")
+            return
+            
+        logger.info(f"Found {len(unused)} unused images:")
+        for img in unused:
+            logger.info(f"  - {img['repo']}:{img['tag']} (Created: {img['created']})")
+            
+        if self.dry_run:
+            logger.info("DRY RUN: Would prune these images.")
+        else:
+            if confirm_deletion(f"Prune {len(unused)} docker images?", default=False):
+                deleted = cleaner.prune_images(unused)
+                logger.info(f"🗑️  Pruned {len(deleted)} images.")
     
     def save_deletion_manifest(self):
         """Save manifest of deleted items for potential undo."""
@@ -354,9 +428,9 @@ class CleanupEngine:
             os.makedirs(os.path.dirname(manifest_file), exist_ok=True)
             with open(manifest_file, 'w') as f:
                 json.dump(manifest, f, indent=2)
-            print(f"\n📝 Deletion manifest saved: {manifest_file}")
+            logger.info(f"\n📝 Deletion manifest saved: {manifest_file}")
         except Exception as e:
-            print(f"⚠️  Could not save deletion manifest: {e}")
+            logger.warning(f"⚠️  Could not save deletion manifest: {e}")
     
     def log_to_csv(self):
         """Log the deletion stats to CSV."""
@@ -395,14 +469,14 @@ class CleanupEngine:
                     'cumulative_total_mb': round(cumulative_total, 2)
                 })
             
-            print(f"\n📊 Log updated: {log_file}")
-            print(f"   Cumulative totals:")
-            print(f"   • Folders: {round(new_folders_total, 2)} MB")
-            print(f"   • Bin: {round(new_bin_total, 2)} MB")
-            print(f"   • Total: {round(cumulative_total, 2)} MB")
+            logger.info(f"\n📊 Log updated: {log_file}")
+            logger.info(f"   Cumulative totals:")
+            logger.info(f"   • Folders: {round(new_folders_total, 2)} MB")
+            logger.info(f"   • Bin: {round(new_bin_total, 2)} MB")
+            logger.info(f"   • Total: {round(cumulative_total, 2)} MB")
             
         except Exception as e:
-            print(f"⚠️  Error writing to log file: {e}")
+            logger.warning(f"⚠️  Error writing to log file: {e}")
     
     def _read_cumulative_totals(self, log_file: str) -> Tuple[float, float]:
         """Read the last cumulative totals from the CSV."""
@@ -428,11 +502,11 @@ class CleanupEngine:
         """
         start_time = datetime.now()
         
-        print(f"\n{'='*60}")
-        print(f"🧹 jhadoo - Smart Cleanup Tool")
-        print(f"{'='*60}")
-        print(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"Mode: {'DRY RUN' if self.dry_run else ('ARCHIVE' if self.archive_mode else 'DELETE')}")
+        logger.info(f"\n{'='*60}")
+        logger.info(f"🧹 jhadoo - Smart Cleanup Tool")
+        logger.info(f"{'='*60}")
+        logger.info(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"Mode: {'DRY RUN' if self.dry_run else ('ARCHIVE' if self.archive_mode else 'DELETE')}")
         
         try:
             # Ensure directories exist
@@ -443,6 +517,12 @@ class CleanupEngine:
             
             # Task 2: Clean bin folder
             bin_size = self.clean_bin_folder()
+            
+            # Task 3: Git Analysis (Info only)
+            self.analyze_git_repositories()
+            
+            # Task 4: Docker Cleanup
+            self.cleanup_docker()
             
             # Save deletion manifest
             if not self.dry_run:
@@ -458,9 +538,9 @@ class CleanupEngine:
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
             
-            print(f"\n{'='*60}")
-            print(f"✅ Cleanup completed in {duration:.1f} seconds")
-            print(f"{'='*60}")
+            logger.info(f"\n{'='*60}")
+            logger.info(f"✅ Cleanup completed in {duration:.1f} seconds")
+            logger.info(f"{'='*60}")
             
             return {
                 "success": True,
@@ -470,7 +550,7 @@ class CleanupEngine:
             
         except Exception as e:
             error_msg = f"Cleanup failed: {e}"
-            print(f"\n❌ {error_msg}")
+            logger.error(f"\n❌ {error_msg}")
             
             if self.config.get("notifications", {}).get("on_error"):
                 notify_error(str(e))
@@ -480,5 +560,6 @@ class CleanupEngine:
                 "error": error_msg,
                 "stats": self.stats
             }
+
 
 
