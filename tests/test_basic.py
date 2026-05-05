@@ -31,3 +31,10 @@ def test_config_defaults():
     assert isinstance(targets, list)
     assert len(targets) > 0
     assert targets[0]["name"] == "venv"
+
+
+def test_config_main_folder_override(tmp_path):
+    """Test that main_folder can be overridden after construction."""
+    config = Config()
+    config.set("main_folder", str(tmp_path))
+    assert config.get("main_folder") == str(tmp_path)
