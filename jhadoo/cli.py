@@ -165,6 +165,7 @@ Examples:
   jhadoo --dashboard        Show statistics and trends
   jhadoo --config my.json   Use custom configuration file
   jhadoo --generate-config  Create a sample config file
+  jhadoo --dir /mnt/data    Scan a custom root directory
         """
     )
     
@@ -172,6 +173,12 @@ Examples:
         '--config', '-c',
         help='Path to custom configuration file (JSON)',
         metavar='FILE'
+    )
+
+    parser.add_argument(
+        '--dir',
+        help='Root directory to scan (default: home directory)',
+        metavar='DIR'
     )
     
     parser.add_argument(
@@ -340,10 +347,19 @@ Examples:
         show_dashboard(config)
         return 0
     
+    # Override scan root if --dir is specified
+    if args.dir:
+        from pathlib import Path
+        scan_dir = Path(args.dir).resolve()
+        if not scan_dir.is_dir():
+            print(f"Error: --dir path does not exist or is not a directory: {args.dir}")
+            return 1
+        config.set("main_folder", str(scan_dir))
+
     # Update config with CLI flags
     if args.docker:
         config.set("docker", {"enabled": True})
-        
+
     if args.git_check:
         config.set("git", {"enabled": True})
         # Disable other cleanups if only checking git? 

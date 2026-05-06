@@ -19,7 +19,7 @@ Vibe coding with Cursor, Copilot, Bolt, Windsurf, or any AI tool is incredibly p
 | `__pycache__` | 1 – 50 MB | Python runtime |
 | `build` / `dist` | varies | Every build cycle |
 
-A few weeks of vibe coding can silently consume **20–50 GB**. jhadoo scans your entire home directory, identifies projects you haven't touched in a while, and cleans up their heavy folders — automatically, safely, and in parallel.
+A few weeks of vibe coding can silently consume **20–50 GB**. jhadoo scans your home directory (or any directory you point it at), identifies projects you haven't touched in a while, and cleans up their heavy folders — automatically, safely, and in parallel.
 
 ## Features
 
@@ -37,11 +37,12 @@ A few weeks of vibe coding can silently consume **20–50 GB**. jhadoo scans you
 ## Usage
 
 ```bash
-jhadoo                # clean now
-jhadoo --dry-run      # safe preview
-jhadoo --archive      # move instead of delete
-jhadoo --restore      # undo last archive
-jhadoo --dashboard    # view savings & trends
+jhadoo                      # clean now (scans home directory)
+jhadoo --dry-run            # safe preview
+jhadoo --dir /path/to/dir   # scan a custom root directory
+jhadoo --archive            # move instead of delete
+jhadoo --restore            # undo last archive
+jhadoo --dashboard          # view savings & trends
 ```
 
 See [`examples/`](examples/) for config, scheduling, Python API, and more.
