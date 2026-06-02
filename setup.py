@@ -9,10 +9,10 @@ long_description = (this_directory / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="jhadoo",
-    version="1.2.8",
+    version="1.3.0",
     author="Bhavishya",
     author_email="your.email@example.com",  # Update with your email
-    description="Smart cleanup tool for developers - removes unused venv, node_modules, Docker images, scans Git repos, and more",
+    description="Smart multi-platform cleanup tool (macOS, Windows, Linux) - auto-cleans unused files, caches, apps, installers, and project build bloat",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/bhav09/jhadoo",

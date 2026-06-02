@@ -14,6 +14,53 @@ from .utils import bytes_to_human_readable
 from . import __version__
 
 
+def print_banner():
+    """Print the stunning colorized GEMINI-inspired JHADOO banner using a 2-color true RGB horizontal gradient."""
+    lines = [
+        r"      _ _    _           _                   ",
+        r"     | | |  | |         | |                  ",
+        r"     | | |__| |__   __ _| |__   ___   ___    ",
+        r" _   | |  __  / _` / _` | '  \ / _ \ / _ \   ",
+        r"| |__| | |  | | (_| | (_| | |) | (_) | (_) |  ",
+        r" \____/|_|  |_|\__,_|\__,_|_.__/ \___/ \___/   "
+    ]
+    
+    print()
+    print("\033[1;34m>\033[0m \033[1;37mJHADOO - THE ADVANCED CLEANUP TOOLKIT\033[0m")
+    
+    max_len = max(len(l) for l in lines) if lines else 1
+    
+    # 24-bit Truecolor RGB Gradient transitioning from Bright Sky Blue to Vibrant Rose/Magenta
+    # Left Anchor: RGB (33, 150, 243) -> Bright Blue
+    # Right Anchor: RGB (233, 30, 99) -> Vibrant Rose Pink
+    start_r, start_g, start_b = 33, 150, 243
+    end_r, end_g, end_b = 233, 30, 99
+    
+    for line in lines:
+        colored_chars = []
+        for idx, char in enumerate(line):
+            if char.isspace():
+                colored_chars.append(char)
+                continue
+            
+            # t goes from 0.0 (far left) to 1.0 (far right)
+            t = idx / max_len
+            
+            # Linear interpolation for RGB
+            r = int(start_r + t * (end_r - start_r))
+            g = int(start_g + t * (end_g - start_g))
+            b = int(start_b + t * (end_b - start_b))
+            
+            # Print character with 24-bit truecolor sequence
+            colored_chars.append(f"\033[38;2;{r};{g};{b}m{char}\033[0m")
+            
+        print("".join(colored_chars))
+    
+    print("\033[1;30m" + "=" * 50 + "\033[0m")
+    print("  ✨ \033[1;32mAuto-clean unused files, caches & apps for a seamless vibe coding experience\033[0m")
+    print("\033[1;30m" + "=" * 50 + "\033[0m\n")
+
+
 def show_dashboard(config: Config):
     """Display summary dashboard with trends and statistics."""
     log_file = config.get("logging", {}).get("log_file")
@@ -248,6 +295,33 @@ Examples:
     )
     
     parser.add_argument(
+        '--optimize', '-o',
+        action='store_true',
+        help='Run system-wide optimizations (DNS cache flush, temporary folder purges, etc.)'
+    )
+    
+    parser.add_argument(
+        '--installers', '-i',
+        action='store_true',
+        help='Scan and clean large, duplicate installer files (.dmg, .pkg, .msi, .exe, .deb, .rpm)'
+    )
+    
+    parser.add_argument(
+        '--uninstall', '-u',
+        nargs='?',
+        const='',
+        default=None,
+        metavar='APP_NAME',
+        help='Deeply uninstall application and find all leftovers & remnants'
+    )
+    
+    parser.add_argument(
+        '--tui', '-t',
+        action='store_true',
+        help='Launch the gorgeous cross-platform Jhadoo Interactive TUI Dashboard'
+    )
+    
+    parser.add_argument(
         '--telemetry-status',
         action='store_true',
         help='Check if anonymous telemetry is enabled'
@@ -324,6 +398,9 @@ Examples:
     # Load configuration
     config = Config(args.config)
     
+    # Print the stylized ASCII banner
+    print_banner()
+    
     # Init logging
     import logging
     logging.basicConfig(level=getattr(logging, config.get("logging", {}).get("level", "INFO")))
@@ -338,6 +415,34 @@ Examples:
     # Handle dashboard
     if args.dashboard:
         show_dashboard(config)
+        return 0
+    
+    # Handle system-wide optimizations
+    if args.optimize:
+        from .optimizer import SystemOptimizer
+        optimizer = SystemOptimizer(dry_run=args.dry_run, archive_mode=args.archive)
+        optimizer.run_all()
+        return 0
+    
+    # Handle installer files cleanup
+    if args.installers:
+        from .installers import InstallerSweeper
+        sweeper = InstallerSweeper(config, dry_run=args.dry_run, archive_mode=args.archive)
+        sweeper.run()
+        return 0
+    
+    # Handle application deep uninstall
+    if args.uninstall is not None:
+        from .uninstaller import AppUninstaller
+        uninstaller = AppUninstaller(config, dry_run=args.dry_run, archive_mode=args.archive)
+        uninstaller.run_cli_flow(args.uninstall)
+        return 0
+    
+    # Handle Jhadoo interactive TUI
+    if args.tui:
+        from .tui import JhadooTUI
+        tui = JhadooTUI(config, dry_run=args.dry_run, archive_mode=args.archive)
+        tui.start()
         return 0
     
     # Update config with CLI flags

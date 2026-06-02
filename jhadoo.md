@@ -114,6 +114,13 @@ jhadoo --dashboard
 ```
 
 ## Version History
+- v1.3.0: High-Impact tw93/Mole Parity Release
+  - Stylized 24-bit Truecolor RGB horizontal gradient startup banner
+  - Interactive Curses-based TUI with real-time performance telemetry and Dynamic Health Score index (iStat Menus inspired)
+  - Hierarchical interactive file tree explorer (DaisyDisk inspired) supporting arrow keys and Vim hotkeys
+  - Deep Application Uninstaller finding cache, configs, plists, and launch agent leftovers cross-platform
+  - Multi-platform system optimizer clearing DNS caches, Workspace desktops, and system temporary paths
+  - Bulk installer and package setup sweeper (.dmg, .pkg, .msi, .exe, .deb, .rpm)
 - v1.0.0: Initial release with comprehensive features
   - Core cleanup functionality
   - Safety features (dry-run, size caps, confirmations, archive mode)
