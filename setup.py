@@ -9,7 +9,7 @@ long_description = (this_directory / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="jhadoo",
-    version="1.3.0",
+    version="1.3.1",
     author="Bhavishya",
     author_email="your.email@example.com",  # Update with your email
     description="Smart multi-platform cleanup tool (macOS, Windows, Linux) - auto-cleans unused files, caches, apps, installers, and project build bloat",

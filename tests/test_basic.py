@@ -6,7 +6,7 @@ from jhadoo import __version__, Config, CleanupEngine
 
 def test_version():
     """Test version is defined."""
-    assert __version__ == "1.3.0"
+    assert __version__ == "1.3.1"
 
 
 def test_config_creation():

@@ -114,6 +114,8 @@ jhadoo --dashboard
 ```
 
 ## Version History
+- v1.3.1: Minor refinement release
+  - Upgraded TUI rendering pipelines, corrected vertical terminal layout alignment, improved horizontal truecolor RGB gradients.
 - v1.3.0: High-Impact tw93/Mole Parity Release
   - Stylized 24-bit Truecolor RGB horizontal gradient startup banner
   - Interactive Curses-based TUI with real-time performance telemetry and Dynamic Health Score index (iStat Menus inspired)
