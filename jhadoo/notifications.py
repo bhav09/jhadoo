@@ -49,11 +49,20 @@ def _send_linux_notification(title: str, message: str):
     os.system(f'notify-send "{title}" "{message}"')
 
 
-def notify_completion(total_size_mb: float, items_deleted: int):
+def notify_completion(total_size_mb: float, items_deleted: int, cumulative_total_mb: float = 0.0):
     """Send completion notification."""
+    from .utils.safety import bytes_to_human_readable
+    
+    freed_str = bytes_to_human_readable(int(total_size_mb * 1024 * 1024))
+    if cumulative_total_mb > 0.0:
+        cum_str = bytes_to_human_readable(int(cumulative_total_mb * 1024 * 1024))
+        msg = f"Saved {freed_str}! • Total cleaned all-time: {cum_str} ✨"
+    else:
+        msg = f"Freed {freed_str} across {items_deleted} items"
+        
     send_notification(
         "jhadoo - Cleanup Complete",
-        f"Freed {total_size_mb:.2f} MB across {items_deleted} items",
+        msg,
         sound=True
     )
 

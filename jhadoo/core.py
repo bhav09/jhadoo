@@ -36,6 +36,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _is_virtualenv(path: str) -> bool:
+    """Detect if a directory path represents a Python virtual environment."""
+    try:
+        # Standard virtualenv/venv has pyvenv.cfg
+        if os.path.exists(os.path.join(path, "pyvenv.cfg")):
+            return True
+        # Conda environment has conda-meta directory
+        if os.path.isdir(os.path.join(path, "conda-meta")):
+            return True
+        # Older or other environments have bin/activate or Scripts/activate
+        if os.path.exists(os.path.join(path, "bin", "activate")) or os.path.exists(os.path.join(path, "Scripts", "activate")):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 class CleanupEngine:
     """Main cleanup engine with safety features."""
     
@@ -88,13 +105,19 @@ class CleanupEngine:
         'desktop.ini',                              # Windows folder config
         '.directory',                               # KDE folder metadata
         'Icon\r',                                   # macOS custom folder icon
+        '.eslintcache',                             # ESLint cache
+        'tsconfig.tsbuildinfo',                     # TypeScript build info
+        'npm-debug.log', 'yarn-error.log',          # package manager logs
     })
     _IGNORE_EXTENSIONS_FOR_MTIME = frozenset({
         '.pyc', '.pyo',                             # Python bytecode
+        '.log',                                     # general log files
+        '.sqlite3', '.sqlite3-journal',             # SQLite databases
+        '.swp',                                     # Vim swap files
     })
 
-    # Subdirectories that should NOT be checked when looking one level
-    # deeper for recent source-file activity (they are either targets
+    # Subdirectories that should NOT be checked when looking for
+    # recent source-file activity (they are either targets
     # themselves, VCS internals, or tool-generated caches).
     _SKIP_SUBDIRS_FOR_MTIME = frozenset({
         'venv', '.venv', 'env', '.env',
@@ -107,8 +130,11 @@ class CleanupEngine:
 
     @classmethod
     def _should_ignore_file(cls, name: str) -> bool:
-        """True if *name* is an OS/editor metadata artifact."""
+        """True if *name* is an OS/editor metadata artifact or transient file."""
         if name in cls._IGNORE_NAMES_FOR_MTIME:
+            return True
+        name_lower = name.lower()
+        if name_lower.endswith('~') or name_lower.startswith('.~'):
             return True
         _, ext = os.path.splitext(name)
         return ext.lower() in cls._IGNORE_EXTENSIONS_FOR_MTIME
@@ -117,62 +143,47 @@ class CleanupEngine:
     def get_last_modified_time(cls, folder_path: str) -> datetime:
         """Most recent mtime of *source* files in a folder.
 
-        Phase 1: checks immediate children (files only, ignoring OS
-        metadata like .DS_Store and bytecode .pyc).
-        Phase 2 (fallback): if Phase 1 found nothing, scans one level
-        deeper into visible, non-artifact subdirectories.  This handles
-        projects whose root has no files — only dirs like ``src/``.
-        Phase 3 (final fallback): if still nothing, returns epoch so the
-        target is always considered stale.
+        Uses a stack-based bounded-depth traversal (up to depth = 5)
+        to check all source files, ignoring OS/editor metadata and bytecode,
+        and skipping VCS, build caches, and targeting subdirectories.
 
-        The previous approach fell back to ``os.path.getmtime(folder)``
-        which is unreliable: on macOS it is bumped by .DS_Store creation,
-        on Windows by thumbnail cache writes, and on Linux by Tracker/
-        Baloo indexing touching directory entries.
+        This avoids returning the epoch timestamp for monorepos or projects
+        whose root has no source files directly in it.
         """
         try:
             latest = 0.0
             found = False
-
-            # --- Phase 1: immediate files ---
-            try:
-                for entry in os.scandir(folder_path):
-                    if entry.is_file(follow_symlinks=False):
-                        if cls._should_ignore_file(entry.name):
-                            continue
-                        try:
-                            latest = max(latest, entry.stat().st_mtime)
-                            found = True
-                        except OSError:
-                            pass
-            except PermissionError:
-                pass
-
-            # --- Phase 2: one level deeper into visible subdirs ---
-            if not found:
+            
+            # Stack elements are tuples of (directory_path, current_depth)
+            stack = [(folder_path, 0)]
+            
+            while stack:
+                curr_path, depth = stack.pop()
+                if depth > 5:
+                    continue
+                
                 try:
-                    for entry in os.scandir(folder_path):
-                        if not entry.is_dir(follow_symlinks=False):
-                            continue
-                        if entry.name.startswith('.') or entry.name in cls._SKIP_SUBDIRS_FOR_MTIME:
-                            continue
-                        try:
-                            for sub in os.scandir(entry.path):
-                                if sub.is_file(follow_symlinks=False):
-                                    if cls._should_ignore_file(sub.name):
-                                        continue
-                                    try:
-                                        latest = max(latest, sub.stat().st_mtime)
-                                        found = True
-                                    except OSError:
-                                        pass
-                        except PermissionError:
-                            pass
+                    for entry in os.scandir(curr_path):
+                        if entry.is_file(follow_symlinks=False):
+                            if cls._should_ignore_file(entry.name):
+                                continue
+                            try:
+                                latest = max(latest, entry.stat().st_mtime)
+                                found = True
+                            except OSError:
+                                pass
+                        elif entry.is_dir(follow_symlinks=False):
+                            # Skip hidden directories, VCS, tool/build caches, and virtual envs
+                            if entry.name.startswith('.') or entry.name.lower() in cls._SKIP_SUBDIRS_FOR_MTIME or _is_virtualenv(entry.path):
+                                continue
+                            # Descend deeper
+                            stack.append((entry.path, depth + 1))
                 except PermissionError:
                     pass
+                except OSError:
+                    pass
 
-            # --- Phase 3: nothing found → treat as stale (epoch) ---
-            return datetime.fromtimestamp(latest)
+            return datetime.fromtimestamp(latest if found else 0.0)
         except Exception:
             return datetime.fromtimestamp(0)
     
@@ -225,20 +236,33 @@ class CleanupEngine:
                 except ValueError:
                     pass
 
-            # Check every target in one shot
-            found_in_this_dir = target_names.intersection(dirs)
-            for tname in found_in_this_dir:
-                target_path = os.path.join(root, tname)
-                if is_protected_path(target_path):
-                    continue
-                if is_path_excluded(target_path, exclusions):
-                    continue
-                raw_hits.append((target_path, tname, root))
-                # Don't descend into the matched target directory
-                try:
-                    dirs.remove(tname)
-                except ValueError:
-                    pass
+            # Check every directory for targets (conventional or unconventional virtualenvs)
+            for d in list(dirs):
+                full_d = os.path.join(root, d)
+                d_lower = d.lower()
+                
+                matched_target = None
+                if d_lower in target_names:
+                    matched_target = d_lower
+                elif d_lower == ".yarn" and os.path.isdir(os.path.join(full_d, "cache")):
+                    # Support Yarn PnP: target .yarn/cache as node_modules
+                    matched_target = "node_modules"
+                    full_d = os.path.join(full_d, "cache")
+                elif d_lower not in always_prune and not d.startswith('.'):
+                    if _is_virtualenv(full_d):
+                        matched_target = "venv"  # Classify as a venv target to inherit default 7-day threshold
+                
+                if matched_target:
+                    if is_protected_path(full_d):
+                        continue
+                    if is_path_excluded(full_d, exclusions):
+                        continue
+                    raw_hits.append((full_d, matched_target, root))
+                    # Don't descend into the matched target directory
+                    try:
+                        dirs.remove(d)
+                    except ValueError:
+                        pass
 
             scanned += 1
             if scanned % 200 == 0:
@@ -300,6 +324,118 @@ class CleanupEngine:
 
         return candidates
 
+    def _scan_global_environments(self, main_folder: str, cutoff_days: int = 7) -> List[Dict[str, Any]]:
+        """Scan global store locations (Poetry, Pipenv, Hatch) for stale/orphaned virtual environments."""
+        global_candidates = []
+        now = datetime.now()
+        cutoff = now - timedelta(days=cutoff_days)
+        
+        # Get standard global directories
+        global_dirs = []
+        from .utils import get_home_directory, get_system
+        home = Path(get_home_directory())
+        system = get_system()
+        
+        # Poetry paths
+        if system == "darwin":
+            global_dirs.append((home / "Library" / "Caches" / "pypoetry" / "virtualenvs", "Poetry"))
+        elif system == "windows":
+            localappdata = os.environ.get("LOCALAPPDATA", "")
+            if localappdata:
+                global_dirs.append((Path(localappdata) / "pypoetry" / "Cache" / "virtualenvs", "Poetry"))
+        else: # Linux
+            global_dirs.append((home / ".cache" / "pypoetry" / "virtualenvs", "Poetry"))
+            
+        # Pipenv paths
+        global_dirs.append((home / ".local" / "share" / "virtualenvs", "Pipenv"))
+        global_dirs.append((home / ".virtualenvs", "Pipenv"))
+        
+        # Hatch paths
+        global_dirs.append((home / ".local" / "share" / "hatch" / "env", "Hatch"))
+        
+        logger.info("\n🌐 Scanning global stores (Poetry, Pipenv, Hatch) for stale environments...")
+        
+        for gdir, manager in global_dirs:
+            if not os.path.isdir(gdir):
+                continue
+                
+            try:
+                for entry in os.scandir(gdir):
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    
+                    env_path = entry.path
+                    
+                    # 1. Check if Pipenv-style .project exists
+                    project_path = None
+                    dot_project = os.path.join(env_path, ".project")
+                    if os.path.isfile(dot_project):
+                        try:
+                            with open(dot_project, "r", encoding="utf-8") as f:
+                                project_path = f.read().strip()
+                        except Exception:
+                            pass
+                    
+                    is_orphaned = False
+                    is_stale_project = False
+                    project_last_mod = datetime.fromtimestamp(0)
+                    
+                    if project_path:
+                        if not os.path.exists(project_path):
+                            is_orphaned = True
+                        else:
+                            project_last_mod = self.get_last_modified_time(project_path)
+                            if project_last_mod < cutoff:
+                                is_stale_project = True
+                    else:
+                        # 2. Extract name and look for matching project in main_folder
+                        # E.g., projectname-hash-py3.10 -> projectname
+                        parts = entry.name.split("-")
+                        if len(parts) > 1:
+                            proj_name = parts[0]
+                            # Look under main_folder
+                            local_path = os.path.join(main_folder, proj_name)
+                            if os.path.isdir(local_path):
+                                project_path = local_path
+                                project_last_mod = self.get_last_modified_time(local_path)
+                                if project_last_mod < cutoff:
+                                    is_stale_project = True
+                            else:
+                                # We can't find a local project; check the env's own mtime
+                                # to see if it's generally stale.
+                                env_mtime = self.get_last_modified_time(env_path)
+                                if env_mtime < cutoff:
+                                    is_orphaned = True
+                                    project_last_mod = env_mtime
+                        else:
+                            # Single-name directories
+                            env_mtime = self.get_last_modified_time(env_path)
+                            if env_mtime < cutoff:
+                                is_orphaned = True
+                                project_last_mod = env_mtime
+                    
+                    # If orphaned or the matching project is stale, flag for cleanup
+                    if is_orphaned or is_stale_project:
+                        # Double check the env's own mtime as safety guardrail
+                        env_mtime = self.get_last_modified_time(env_path)
+                        if env_mtime >= cutoff:
+                            # Recently modified/used virtualenv; skip for safety
+                            continue
+                            
+                        size = self.get_size(env_path)
+                        global_candidates.append({
+                            "path": env_path,
+                            "size": size,
+                            "last_modified": project_last_mod.isoformat(),
+                            "type": "folder",
+                            "target_name": f"global-{manager.lower()}-env",
+                        })
+            except Exception as e:
+                logger.debug(f"Error scanning global directory {gdir}: {e}")
+                
+        logger.info(f"   ✓ Found {len(global_candidates)} global environment(s) eligible for cleanup")
+        return global_candidates
+
     def delete_or_archive_item(self, item: Dict[str, Any]) -> bool:
         """Delete or archive a single item.
         
@@ -348,6 +484,11 @@ class CleanupEngine:
 
         all_candidates = self._scan_all_targets(main_folder, targets)
         
+        # Scan and append global environments if venv or .venv is enabled
+        if any(t["name"] in ["venv", ".venv"] and t.get("enabled", True) for t in targets):
+            global_candidates = self._scan_global_environments(main_folder)
+            all_candidates.extend(global_candidates)
+        
         if not all_candidates:
             logger.info("\n✓ No folders to clean up!")
             return 0
@@ -380,15 +521,35 @@ class CleanupEngine:
             
             return 0
         
-        confirmation_threshold = safety_config.get("require_confirmation_above_mb", 500)
-        if total_size > confirmation_threshold * 1024 * 1024:
-            if not confirm_deletion(
-                f"\n⚠️  About to {'archive' if self.archive_mode else 'delete'} "
-                f"{len(all_candidates)} items ({bytes_to_human_readable(total_size)}). Continue?",
-                default=False
-            ):
-                logger.info("❌ Operation cancelled by user.")
+        # Check if stdin is interactive (a TTY)
+        import sys
+        is_interactive = sys.stdin.isatty() if hasattr(sys.stdin, "isatty") else False
+
+        if not is_interactive:
+            limit_5gb = 5000 * 1024 * 1024
+            if total_size >= limit_5gb:
+                logger.warning(f"⚠️  Cleanup size ({bytes_to_human_readable(total_size)}) is 5GB or more. Skipping background auto-cleanup for safety.")
+                # Send desktop notification to ask for terminal review
+                from .notifications import send_notification
+                send_notification(
+                    "jhadoo - Review Required",
+                    f"Heavy cleanup pending ({bytes_to_human_readable(total_size)}). Run 'jhadoo' in terminal to confirm.",
+                    sound=True
+                )
                 return 0
+            else:
+                logger.info(f"🤖 Background auto-cleanup: proceeding with {bytes_to_human_readable(total_size)} deletion.")
+        else:
+            # Interactive mode confirmation
+            confirmation_threshold = safety_config.get("require_confirmation_above_mb", 500)
+            if total_size > confirmation_threshold * 1024 * 1024:
+                if not confirm_deletion(
+                    f"\n⚠️  About to {'archive' if self.archive_mode else 'delete'} "
+                    f"{len(all_candidates)} items ({bytes_to_human_readable(total_size)}). Continue?",
+                    default=False
+                ):
+                    logger.info("❌ Operation cancelled by user.")
+                    return 0
         
         # Parallel deletion
         logger.info(f"\n🚀 Starting cleanup ({min(4, len(all_candidates))} workers)...")
@@ -611,6 +772,9 @@ class CleanupEngine:
         total_deleted = folders_size_mb + bin_size_mb
         cumulative_total = new_folders_total + new_bin_total
         
+        # Store cumulative total as instance variable for notifications
+        self.cumulative_total_mb = cumulative_total
+        
         try:
             os.makedirs(os.path.dirname(log_file), exist_ok=True)
             with open(log_file, 'a', newline='') as file:
@@ -700,7 +864,8 @@ class CleanupEngine:
             if self.config.get("notifications", {}).get("enabled") and not self.dry_run:
                 total_mb = (folders_size + bin_size) / (1024 * 1024)
                 total_items = self.stats["folders_deleted"] + self.stats["bin_deleted"]
-                notify_completion(total_mb, total_items)
+                cumulative_total_mb = getattr(self, "cumulative_total_mb", 0.0)
+                notify_completion(total_mb, total_items, cumulative_total_mb)
             
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
