@@ -7,7 +7,7 @@ import csv
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
-from .config import Config
+from .config import Config, ConfigLoadError
 from .core import CleanupEngine
 from .scheduler import Scheduler
 from .utils import bytes_to_human_readable
@@ -344,8 +344,18 @@ Examples:
         action='version',
         version=f'%(prog)s {__version__}'
     )
+
+    parser.add_argument(
+        '--test-delay',
+        type=float,
+        help=argparse.SUPPRESS,  # Hidden argument for QA testing
+        default=None
+    )
     
     args = parser.parse_args()
+
+    if args.test_delay is not None:
+        os.environ["JHADOO_TEST_DELAY"] = str(args.test_delay)
     
     # Handle config generation
     if args.generate_config:
@@ -353,7 +363,11 @@ Examples:
         return 0
     
     # Load configuration first for telemetry checks
-    config = Config(args.config)
+    try:
+        config = Config(args.config)
+    except ConfigLoadError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     
     # Handle telemetry commands
     if args.telemetry_status:
@@ -396,7 +410,11 @@ Examples:
         return 0 if success else 1
     
     # Load configuration
-    config = Config(args.config)
+    try:
+        config = Config(args.config)
+    except ConfigLoadError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     
     # Print the stylized ASCII banner
     print_banner()
@@ -465,6 +483,8 @@ Examples:
     
     result = engine.run()
     
+    if result.get("interrupted"):
+        return 130
     return 0 if result["success"] else 1
 
 

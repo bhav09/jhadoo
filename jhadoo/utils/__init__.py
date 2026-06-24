@@ -14,6 +14,7 @@ from .progress import ProgressBar, Spinner
 
 from .safety import (
     confirm_deletion,
+    log_user_cancelled,
     bytes_to_human_readable,
     check_size_threshold,
     is_path_excluded,
@@ -32,6 +33,7 @@ __all__ = [
     'ProgressBar',
     'Spinner',
     'confirm_deletion',
+    'log_user_cancelled',
     'bytes_to_human_readable',
     'check_size_threshold',
     'is_path_excluded',

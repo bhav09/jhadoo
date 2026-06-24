@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Tuple, Set
 from pathlib import Path
 
 from .utils.os_compat import get_system, get_home_directory, is_protected_path, normalize_path
-from .utils.safety import bytes_to_human_readable, confirm_deletion
+from .utils.safety import bytes_to_human_readable, confirm_deletion, log_user_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -421,5 +421,5 @@ class AppUninstaller:
             
             return bytes_saved
         else:
-            logger.info("❌ Operation cancelled.")
+            logger.info(log_user_cancelled("App uninstall"))
             return 0

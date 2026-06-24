@@ -15,6 +15,7 @@ from .utils import (
     ProgressBar,
     Spinner,
     confirm_deletion,
+    log_user_cancelled,
     bytes_to_human_readable,
     check_size_threshold,
     is_path_excluded,
@@ -548,8 +549,8 @@ class CleanupEngine:
                     f"{len(all_candidates)} items ({bytes_to_human_readable(total_size)}). Continue?",
                     default=False
                 ):
-                    logger.info("❌ Operation cancelled by user.")
-                    return 0
+                    logger.info(log_user_cancelled("Cleanup"))
+                    return -1
         
         # Parallel deletion
         logger.info(f"\n🚀 Starting cleanup ({min(4, len(all_candidates))} workers)...")
@@ -557,20 +558,38 @@ class CleanupEngine:
         
         successful = 0
         workers = min(4, len(all_candidates))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(self.delete_or_archive_item, item): item
-                       for item in all_candidates}
-            for fut in as_completed(futures):
-                item = futures[fut]
-                try:
-                    if fut.result():
-                        self.deleted_items.append(item)
-                        successful += 1
-                        self.stats["folders_deleted"] += 1
-                        self.stats["folders_size"] += item["size"]
-                except Exception:
-                    pass
-                progress.update()
+        try:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(self.delete_or_archive_item, item): item
+                           for item in all_candidates}
+                for fut in as_completed(futures):
+                    item = futures[fut]
+                    try:
+                        if fut.result():
+                            self.deleted_items.append(item)
+                            successful += 1
+                            self.stats["folders_deleted"] += 1
+                            self.stats["folders_size"] += item["size"]
+                    except Exception:
+                        pass
+                    
+                    # Introduce artificial delay if requested for QA testing
+                    test_delay = os.environ.get("JHADOO_TEST_DELAY")
+                    if test_delay:
+                        try:
+                            import time
+                            time.sleep(float(test_delay))
+                        except Exception:
+                            pass
+                            
+                    progress.update()
+        except KeyboardInterrupt:
+            # Cancel all pending futures
+            for fut in futures:
+                fut.cancel()
+            # Finish progress bar cleanly
+            progress.finish()
+            raise
         
         progress.finish()
         
@@ -718,6 +737,7 @@ class CleanupEngine:
             
         cleaner = DockerCleaner()
         if not cleaner.is_docker_available():
+            logger.warning("⚠️  Docker not installed — skipping image cleanup")
             return
             
         days = self.config.get("docker", {}).get("unused_image_days", 60)
@@ -738,6 +758,8 @@ class CleanupEngine:
             if confirm_deletion(f"Prune {len(unused)} docker images?", default=False):
                 deleted = cleaner.prune_images(unused)
                 logger.info(f"🗑️  Pruned {len(deleted)} images.")
+            else:
+                logger.info(log_user_cancelled("Docker prune"))
     
     def save_deletion_manifest(self):
         """Save manifest of deleted items for potential undo."""
@@ -837,7 +859,14 @@ class CleanupEngine:
         targets = self.config.get_enabled_targets()
         target_summary = ", ".join(f"{t['name']} (>{t['days_threshold']}d)" for t in targets)
         logger.info(f"Targets: {target_summary}")
-        logger.info(f"Git analysis: {'ON' if self.config.get('git', {}).get('enabled', False) else 'OFF'}  |  Docker cleanup: {'ON' if self.config.get('docker', {}).get('enabled', False) else 'OFF'}")
+        docker_enabled = self.config.get('docker', {}).get('enabled', False)
+        if docker_enabled:
+            cleaner = DockerCleaner()
+            docker_status = "ON" if cleaner.is_docker_available() else "SKIPPED (not installed)"
+        else:
+            docker_status = "OFF"
+            
+        logger.info(f"Git analysis: {'ON' if self.config.get('git', {}).get('enabled', False) else 'OFF'}  |  Docker cleanup: {docker_status}")
         
         try:
             # Ensure directories exist
@@ -845,6 +874,13 @@ class CleanupEngine:
             
             # Task 1: Clean up target folders
             folders_size = self.cleanup_targets()
+            if folders_size == -1:
+                logger.info("\n❌ Cleanup cancelled by user. No files were deleted or archived.")
+                return {
+                    "success": True,
+                    "cancelled": True,
+                    "stats": self.stats
+                }
             
             # Task 2: Clean bin folder
             bin_size = self.clean_bin_folder()
@@ -903,6 +939,18 @@ class CleanupEngine:
                 "duration_seconds": duration
             }
             
+        except KeyboardInterrupt:
+            logger.warning("\n⚠️  Interrupted by user (Ctrl+C). Partial cleanup may have occurred — check deletion manifest.")
+            if not self.dry_run:
+                try:
+                    self.save_deletion_manifest()
+                except Exception:
+                    pass
+            return {
+                "success": False,
+                "interrupted": True,
+                "stats": self.stats
+            }
         except Exception as e:
             error_msg = f"Cleanup failed: {e}"
             logger.error(f"\n❌ {error_msg}")

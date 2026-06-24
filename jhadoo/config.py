@@ -7,6 +7,11 @@ from typing import Dict, List, Any, Optional
 from .utils.os_compat import get_default_bin_folder, get_home_directory
 
 
+class ConfigLoadError(Exception):
+    """Exception raised when a configuration file fails to load."""
+    pass
+
+
 class Config:
     """Configuration manager for cleanup operations."""
     
@@ -103,7 +108,11 @@ class Config:
         self.config = self.DEFAULT_CONFIG.copy()
         self._set_defaults()
         
-        if config_path and os.path.exists(config_path):
+        if config_path is not None:
+            if config_path == "":
+                raise ConfigLoadError("Configuration path cannot be empty.")
+            if not os.path.exists(config_path):
+                raise ConfigLoadError(f"Configuration file not found: {config_path}")
             self.load_from_file(config_path)
     
     def _set_defaults(self):
@@ -133,9 +142,10 @@ class Config:
             
             # Deep merge with defaults
             self._merge_config(user_config)
+        except json.JSONDecodeError as e:
+            raise ConfigLoadError(f"Invalid JSON in configuration file: {e}")
         except Exception as e:
-            print(f"Warning: Could not load config from {config_path}: {e}")
-            print("Using default configuration.")
+            raise ConfigLoadError(f"Could not load config from {config_path}: {e}")
     
     def _merge_config(self, user_config: Dict[str, Any]):
         """Merge user config with defaults."""

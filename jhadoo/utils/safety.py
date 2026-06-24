@@ -5,6 +5,11 @@ from typing import List, Dict, Any
 from pathlib import Path
 
 
+def log_user_cancelled(scope: str) -> str:
+    """Return a consistent cancellation message for a given scope."""
+    return f"❌ {scope} cancelled by user."
+
+
 def confirm_deletion(message: str, default: bool = False) -> bool:
     """Prompt user for confirmation."""
     valid = {"yes": True, "y": True, "no": False, "n": False}

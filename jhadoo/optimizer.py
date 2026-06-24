@@ -32,14 +32,42 @@ class SystemOptimizer:
         output = ""
 
         if self.system == "darwin":  # macOS
-            # Multi-command for macOS DNS flush
-            cmd = "dscacheutil -flushcache; killall -HUP mDNSResponder"
+            # Split commands to handle partial success (e.g. non-admin users)
+            success_dscache = False
+            success_killall = False
+            errors = []
+
+            # 1. dscacheutil
             try:
-                subprocess.run(cmd, shell=True, check=True, capture_output=True)
+                res1 = subprocess.run(["dscacheutil", "-flushcache"], capture_output=True, text=True, check=False)
+                if res1.returncode == 0:
+                    success_dscache = True
+                else:
+                    errors.append(f"dscacheutil failed: {res1.stderr.strip() or res1.stdout.strip()}")
+            except Exception as e:
+                errors.append(f"dscacheutil error: {e}")
+
+            # 2. killall
+            try:
+                res2 = subprocess.run(["killall", "-HUP", "mDNSResponder"], capture_output=True, text=True, check=False)
+                if res2.returncode == 0:
+                    success_killall = True
+                else:
+                    err_msg = res2.stderr.strip() or res2.stdout.strip()
+                    if "No matching processes belonging to you were found" in err_msg or "Operation not permitted" in err_msg:
+                        err_msg += " (mDNSResponder reload requires administrator privileges. Try running Jhadoo with sudo or ignore if DNS resolves fine)"
+                    errors.append(f"killall failed: {err_msg}")
+            except Exception as e:
+                errors.append(f"killall error: {e}")
+
+            if success_dscache and success_killall:
                 success = True
                 output = "macOS DNS cache flushed successfully."
-            except subprocess.CalledProcessError as e:
-                output = f"Failed to flush macOS DNS: {e.stderr.decode().strip()}"
+            elif success_dscache:
+                success = True  # Grade dscacheutil success as overall success with a note
+                output = "macOS DNS cache flushed partially (dscacheutil succeeded, but mDNSResponder reload failed: process not owned by you or requires sudo)."
+            else:
+                output = f"Failed to flush macOS DNS: {'; '.join(errors)}"
 
         elif self.system == "windows":  # Windows
             cmd = ["ipconfig", "/flushdns"]
