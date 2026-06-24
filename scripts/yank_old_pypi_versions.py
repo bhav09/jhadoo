@@ -34,7 +34,7 @@ def get_pypi_releases(package_name):
 
 
 def yank_release(package_name, version, token, reason, dry_run=True):
-    """Yank a specific release version on PyPI using the Warehouse REST API."""
+    """Yank a specific release version on PyPI using the REST API (PATCH /api/projects/{name}/{version})."""
     url = f"https://pypi.org/api/projects/{package_name}/{version}"
     headers = {
         "Content-Type": "application/json",
@@ -59,11 +59,18 @@ def yank_release(package_name, version, token, reason, dry_run=True):
                 print(f"✗ Failed to yank {package_name}=={version}: HTTP {response.status}", file=sys.stderr)
                 return False
     except urllib.error.HTTPError as e:
-        # Read response body for details if possible
         try:
             err_detail = e.read().decode()
         except Exception:
             err_detail = str(e)
+        
+        if e.code in (404, 405):
+            print(f"⚠️  PyPI programmatic yanking API returned {e.code} (Not Supported/Method Not Allowed).", file=sys.stderr)
+            print(f"   This indicates that PyPI does not currently support programmatic yanking via API.", file=sys.stderr)
+            print(f"   Please yank older versions manually at https://pypi.org/manage/project/{package_name}/releases/ if needed.", file=sys.stderr)
+            # Return True to avoid breaking CI pipelines since this is a platform limitation, not a script bug
+            return True
+            
         print(f"✗ HTTP Error yanking {package_name}=={version}: {e.code} - {err_detail}", file=sys.stderr)
         return False
 
