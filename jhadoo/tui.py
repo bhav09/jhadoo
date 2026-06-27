@@ -17,7 +17,7 @@ except ImportError:
     curses = None
 
 from .utils.os_compat import get_system, get_home_directory, is_protected_path
-from .utils.safety import bytes_to_human_readable
+from .utils.safety import bytes_to_human_readable, confirm_deletion
 from .optimizer import SystemOptimizer
 from .installers import InstallerSweeper
 from .uninstaller import AppUninstaller
