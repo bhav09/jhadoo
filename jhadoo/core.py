@@ -54,6 +54,42 @@ def _is_virtualenv(path: str) -> bool:
     return False
 
 
+_JS_PARENT_MARKERS = frozenset({
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+})
+
+
+def _parent_has_js_project(parent: str) -> bool:
+    """True if parent directory looks like a JS/Node project root."""
+    try:
+        for name in _JS_PARENT_MARKERS:
+            if os.path.isfile(os.path.join(parent, name)):
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def _is_js_dependency_tree(path: str, parent: str) -> bool:
+    """Detect renamed npm/pnpm dependency trees (e.g. js_deps instead of node_modules)."""
+    if not _parent_has_js_project(parent):
+        return False
+    try:
+        if os.path.isdir(os.path.join(path, ".bin")):
+            return True
+        if os.path.isdir(os.path.join(path, ".pnpm")):
+            return True
+        for entry in os.scandir(path):
+            if entry.is_dir(follow_symlinks=False) and entry.name.startswith("@"):
+                return True
+    except OSError:
+        pass
+    return False
+
+
 class CleanupEngine:
     """Main cleanup engine with safety features."""
     
@@ -249,9 +285,11 @@ class CleanupEngine:
                     # Support Yarn PnP: target .yarn/cache as node_modules
                     matched_target = "node_modules"
                     full_d = os.path.join(full_d, "cache")
-                elif d_lower not in always_prune and not d.startswith('.'):
+                elif d_lower not in always_prune:
                     if _is_virtualenv(full_d):
-                        matched_target = "venv"  # Classify as a venv target to inherit default 7-day threshold
+                        matched_target = "venv"
+                    elif _is_js_dependency_tree(full_d, root):
+                        matched_target = "node_modules"
                 
                 if matched_target:
                     if is_protected_path(full_d):
@@ -444,6 +482,15 @@ class CleanupEngine:
             True if successful, False otherwise
         """
         path = item["path"]
+
+        # QA/testing: delay before processing so Ctrl+C can be exercised mid-run
+        test_delay = os.environ.get("JHADOO_TEST_DELAY")
+        if test_delay:
+            try:
+                import time
+                time.sleep(float(test_delay))
+            except Exception:
+                pass
         
         is_safe, error_msg = validate_path_safety(path)
         if not is_safe:
@@ -454,7 +501,24 @@ class CleanupEngine:
         try:
             if self.archive_mode:
                 archive_folder = self.config.get("safety", {}).get("archive_folder")
-                os.makedirs(archive_folder, exist_ok=True)
+                item_size = item.get("size") or self.get_size(path)
+                try:
+                    os.makedirs(archive_folder, exist_ok=True)
+                    usage = shutil.disk_usage(archive_folder)
+                    if usage.free < item_size:
+                        error_msg = (
+                            f"Insufficient disk space to archive {path}: need "
+                            f"{bytes_to_human_readable(item_size)}, free "
+                            f"{bytes_to_human_readable(usage.free)}"
+                        )
+                        logger.error(f"❌ {error_msg}")
+                        self.stats["errors"].append(error_msg)
+                        return False
+                except OSError as e:
+                    error_msg = f"Could not check disk space for archive: {e}"
+                    logger.error(f"❌ {error_msg}")
+                    self.stats["errors"].append(error_msg)
+                    return False
                 archive_path = self._compute_archive_path(archive_folder, path)
                 os.makedirs(os.path.dirname(archive_path), exist_ok=True)
                 shutil.move(path, archive_path)
@@ -572,15 +636,6 @@ class CleanupEngine:
                             self.stats["folders_size"] += item["size"]
                     except Exception:
                         pass
-                    
-                    # Introduce artificial delay if requested for QA testing
-                    test_delay = os.environ.get("JHADOO_TEST_DELAY")
-                    if test_delay:
-                        try:
-                            import time
-                            time.sleep(float(test_delay))
-                        except Exception:
-                            pass
                             
                     progress.update()
         except KeyboardInterrupt:

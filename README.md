@@ -116,6 +116,29 @@ jhadoo --uninstall   # Interactive prompt to remove applications and their confi
     *   Disable: `jhadoo --telemetry-off`
     *   Check status: `jhadoo --telemetry-status`
 
+## QA and Troubleshooting
+
+### macOS DNS flush (non-admin)
+Running `jhadoo --optimize` without `sudo` may report a **partial** DNS flush: `dscacheutil` succeeds, but reloading `mDNSResponder` requires administrator privileges. This is expected. For a full flush, run `sudo jhadoo --optimize`.
+
+### Manual Ctrl+C testing
+On fast storage, cleanup can finish before you can press Ctrl+C. Use a deliberate delay:
+
+```bash
+jhadoo --archive --test-delay 10 --config /path/to/test-config.json
+```
+
+Point the config `main_folder` at a small stale test project. Expect exit code `130` and a partial deletion manifest.
+
+### PyPI old versions
+Only the latest 3 PyPI releases should remain installable by default. Verify with:
+
+```bash
+python scripts/yank_old_pypi_versions.py --verify-only --keep 3
+```
+
+Explicit pins like `pip install jhadoo==1.2.0` may still work for yanked releases (PEP 592). See `docs/QA.md` for the full QA matrix.
+
 ## License
 
 MIT License. See [LICENSE](LICENSE) for more details.

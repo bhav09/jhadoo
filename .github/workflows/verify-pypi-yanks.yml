@@ -1,0 +1,15 @@
+name: Verify PyPI Yank State
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+
+jobs:
+  verify:
+    name: Verify only latest 3 versions are active on PyPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify yank state
+        run: python scripts/yank_old_pypi_versions.py --keep 3 --verify-only
