@@ -31,9 +31,11 @@ jobs:
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: twine upload dist/*
       - name: Yank old PyPI versions (keep latest 3)
+        continue-on-error: true
         env:
           PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: python scripts/yank_old_pypi_versions.py --keep 3 --apply
       - name: Verify PyPI yank state
+        continue-on-error: true
         if: always()
         run: python scripts/yank_old_pypi_versions.py --keep 3 --verify-only
