@@ -55,6 +55,24 @@ class TestSignatureDetection(unittest.TestCase):
             os.makedirs(os.path.join(vendor, ".bin"))
             self.assertFalse(_is_js_dependency_tree(vendor, project))
 
+    def test_is_js_dependency_tree_pnpm_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = os.path.join(tmp, "project")
+            deps = os.path.join(project, "dependencies")
+            os.makedirs(os.path.join(deps, "@babel", "core"))
+            with open(os.path.join(project, "pnpm-lock.yaml"), "w", encoding="utf-8") as f:
+                f.write("lockfileVersion: 5.4\n")
+            self.assertTrue(_is_js_dependency_tree(deps, project))
+
+    def test_is_js_dependency_tree_lockfile_only_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = os.path.join(tmp, "project")
+            deps = os.path.join(project, "js_deps")
+            os.makedirs(os.path.join(deps, ".bin"))
+            with open(os.path.join(project, "package-lock.json"), "w", encoding="utf-8") as f:
+                f.write("{}")
+            self.assertTrue(_is_js_dependency_tree(deps, project))
+
 
 class TestTargetScanning(unittest.TestCase):
 
@@ -87,8 +105,9 @@ class TestTargetScanning(unittest.TestCase):
 
         engine = self._engine()
         candidates = engine._scan_all_targets(self.root, self._targets())
-        paths = {c["path"] for c in candidates}
-        self.assertIn(venv_path, paths)
+        by_path = {c["path"]: c for c in candidates}
+        self.assertIn(venv_path, by_path)
+        self.assertEqual(by_path[venv_path]["target_name"], "venv")
 
     @patch("jhadoo.core.is_protected_path", return_value=False)
     @patch.object(CleanupEngine, "get_last_modified_time")
@@ -102,8 +121,34 @@ class TestTargetScanning(unittest.TestCase):
 
         engine = self._engine()
         candidates = engine._scan_all_targets(self.root, self._targets())
+        by_path = {c["path"]: c for c in candidates}
+        self.assertIn(deps, by_path)
+        self.assertEqual(by_path[deps]["target_name"], "node_modules")
+
+    @patch("jhadoo.core.is_protected_path", return_value=False)
+    @patch.object(CleanupEngine, "get_last_modified_time")
+    def test_standard_node_modules_by_name(self, mock_mtime, _mock_protected):
+        mock_mtime.return_value = datetime.now() - timedelta(days=30)
+        project = os.path.join(self.root, "project")
+        nm = os.path.join(project, "node_modules")
+        os.makedirs(nm)
+
+        engine = self._engine()
+        candidates = engine._scan_all_targets(self.root, self._targets())
         paths = {c["path"] for c in candidates}
-        self.assertIn(deps, paths)
+        self.assertIn(nm, paths)
+
+    @patch("jhadoo.core.is_protected_path", return_value=False)
+    @patch.object(CleanupEngine, "get_last_modified_time")
+    def test_git_directory_not_detected_as_venv(self, mock_mtime, _mock_protected):
+        mock_mtime.return_value = datetime.now() - timedelta(days=30)
+        git_path = os.path.join(self.root, "project", ".git")
+        os.makedirs(os.path.join(git_path, "objects"))
+
+        engine = self._engine()
+        candidates = engine._scan_all_targets(self.root, [{"name": "venv", "days_threshold": 7, "enabled": True}])
+        paths = {c["path"] for c in candidates}
+        self.assertNotIn(git_path, paths)
 
     @patch("jhadoo.core.is_protected_path", return_value=False)
     @patch.object(CleanupEngine, "get_last_modified_time")
@@ -165,6 +210,25 @@ class TestArchiveDiskGuard(unittest.TestCase):
                     engine.delete_or_archive_item(item)
                     mock_sleep.assert_called_once_with(2.0)
                     mock_move.assert_called_once()
+
+    @patch("jhadoo.core.validate_path_safety", return_value=(True, ""))
+    @patch("shutil.disk_usage")
+    def test_delete_unaffected_by_disk_check(self, mock_disk_usage, _mock_safe):
+        mock_disk_usage.return_value = MagicMock(free=100)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "target")
+            os.makedirs(src)
+
+            config = Config()
+            engine = CleanupEngine(config, dry_run=False, archive_mode=False)
+            item = {"path": src, "size": 5000}
+
+            with patch("shutil.rmtree") as mock_rmtree:
+                result = engine.delete_or_archive_item(item)
+                self.assertTrue(result)
+                mock_rmtree.assert_called_once_with(src)
+                mock_disk_usage.assert_not_called()
 
 
 if __name__ == "__main__":

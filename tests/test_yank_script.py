@@ -1,9 +1,8 @@
 """Tests for PyPI yank verification script."""
 
-import json
 import unittest
-from io import StringIO
-from unittest.mock import patch, MagicMock
+import urllib.error
+from unittest.mock import patch
 
 import scripts.yank_old_pypi_versions as yank_script
 
@@ -29,6 +28,20 @@ class TestYankVerify(unittest.TestCase):
             "1.2.0": [{"yanked": False}],
         }
         self.assertFalse(yank_script.verify_yank_state("jhadoo", keep=3))
+
+    def test_yank_release_returns_false_on_api_404(self):
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = urllib.error.HTTPError(
+                url="https://pypi.org/api/projects/jhadoo/1.2.0",
+                code=404,
+                msg="Not Found",
+                hdrs={},
+                fp=None,
+            )
+            result = yank_script.yank_release(
+                "jhadoo", "1.2.0", "fake-token", "test reason", dry_run=False
+            )
+            self.assertFalse(result)
 
     @patch("scripts.yank_old_pypi_versions.get_pypi_releases")
     @patch("scripts.yank_old_pypi_versions.yank_release", return_value=False)
