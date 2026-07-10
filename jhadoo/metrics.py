@@ -431,7 +431,8 @@ class SystemMetrics:
             return mb / 2.0, mb / 2.0
 
         if self.system == "darwin":
-            return _macos_disk_io_per_second()
+            result = _macos_disk_io_per_second()
+            return result if result is not None else (None, None)
 
         # Windows disk I/O via typeperf is flaky and slow; degrade gracefully.
         return None, None
@@ -481,6 +482,7 @@ class SystemMetrics:
             return mb / 2.0, mb / 2.0
 
         if self.system == "darwin":
-            return _macos_net_io_per_second()
+            result = _macos_net_io_per_second()
+            return result if result is not None else (None, None)
 
         return None, None
