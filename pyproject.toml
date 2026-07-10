@@ -1,0 +1,74 @@
+[build-system]
+build-backend = "hatchling.build"
+requires = [ "hatchling" ]
+
+[project]
+name = "jhadoo"
+version = "1.3.6"
+description = """\
+  Smart multi-platform cleanup tool (macOS, Windows, Linux) - auto-cleans unused files, caches, apps, installers, and \
+  project build bloat\
+  """
+readme = "README.md"
+keywords = [
+  "automation",
+  "build-cleanup",
+  "cache-cleanup",
+  "cleanup",
+  "development-tools",
+  "devops",
+  "disk-space",
+  "file-management",
+  "folder-agnostic",
+  "folder-cleanup",
+  "multi-language",
+  "universal-cleaner",
+]
+license = "MIT"
+authors = [
+  { name = "Bhavishya", email = "your.email@example.com" },
+]
+requires-python = ">=3.10"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: OS Independent",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: System :: Filesystems",
+  "Topic :: Utilities",
+]
+dependencies = []
+optional-dependencies.metrics = [
+  # Optional: enables live CPU/Memory/Disk/Network telemetry in the
+  # TUI dashboard. Without it, the TUI falls back to stdlib sampling
+  # on Linux/macOS and degrades to a [SIMULATED] placeholder on
+  # platforms where stdlib sampling isn't implemented.
+  "psutil>=5.9",
+]
+optional-dependencies.notifications = [
+  "win10toast>=0.9; platform_system=='Windows'",
+]
+urls."Bug Tracker" = "https://github.com/bhav09/jhadoo/issues"
+urls."Source Code" = "https://github.com/bhav09/jhadoo"
+urls.Documentation = "https://github.com/bhav09/jhadoo#readme"
+urls.Homepage = "https://github.com/bhav09/jhadoo"
+scripts.jhadoo = "jhadoo.cli:main"
+
+[dependency-groups]
+dev = [
+  "black>=23",
+  "flake8>=6",
+  "mypy>=1",
+  "pytest>=7",
+  "pytest-cov>=4",
+]
+
+[tool.hatch]
+build.targets.sdist.exclude = [ ".github" ]
