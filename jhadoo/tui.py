@@ -34,7 +34,7 @@ class JhadooTUI:
         self.archive_mode = archive_mode
         self.system = get_system()
         self.stdscr = None
-        
+
         # Colors
         self.COLOR_PRIMARY = 1    # Blue
         self.COLOR_SUCCESS = 2    # Green
@@ -43,6 +43,12 @@ class JhadooTUI:
         self.COLOR_INFO = 5       # Cyan
         self.COLOR_ACCENT = 6     # Magenta
         self.COLOR_GRAY = 7       # Dark Gray
+
+        # Minimum usable terminal dimensions for the TUI.
+        # Smaller than this and we render a "Terminal too small" prompt instead
+        # of crashing on out-of-bounds addstr calls during resize.
+        self.MIN_H = 10
+        self.MIN_W = 40
 
     def start(self):
         """Entry point to initialize curses and run main screen."""
@@ -54,47 +60,135 @@ class JhadooTUI:
                 print("👉 Standard curses module is missing or corrupted on your system.")
             return
 
+        # curses.wrapper handles curses setup/teardown and restores the terminal
+        # on any exception. We additionally guard _curses_main against transient
+        # curses.error raised during rapid terminal resize.
         curses.wrapper(self._curses_main)
+
+    def _safe_addstr(self, y: int, x: int, text: str, attr: int = 0) -> None:
+        """Bounds-checked addstr that survives terminal resize.
+
+        During a resize, curses raises `curses.error` if the cursor would land
+        outside the current window bounds. We clip the text to the current
+        width and swallow the error so the redraw on the next KEY_RESIZE tick
+        can succeed.
+        """
+        if self.stdscr is None:
+            return
+        try:
+            h, w = self.stdscr.getmaxyx()
+        except curses.error:
+            return
+        if y < 0 or y >= h or x < 0 or x >= w:
+            return
+        # Leave one column of slack to avoid the bottom-right cell edge case
+        # where curses raises even when the cursor is technically in-bounds.
+        max_len = max(0, w - x - 1)
+        clipped = text[:max_len]
+        if not clipped:
+            return
+        try:
+            self.stdscr.addstr(y, x, clipped, attr)
+        except curses.error:
+            # Resize race — drop this draw; the main loop will redraw on the
+            # next KEY_RESIZE event.
+            pass
+
+    def _too_small(self) -> bool:
+        """True if the terminal is below the minimum usable size."""
+        if self.stdscr is None:
+            return True
+        try:
+            h, w = self.stdscr.getmaxyx()
+        except curses.error:
+            return True
+        return h < self.MIN_H or w < self.MIN_W
+
+    def _draw_too_small(self) -> None:
+        """Render the 'Terminal too small' prompt and wait for a resize/quit key."""
+        if self.stdscr is None:
+            return
+        try:
+            self.stdscr.clear()
+            h, w = self.stdscr.getmaxyx()
+            msg1 = "⚠ Terminal too small"
+            msg2 = f"Need at least {self.MIN_W} cols × {self.MIN_H} rows. Press Q to quit."
+            if h >= 1:
+                self._safe_addstr(0, max(0, (w - len(msg1)) // 2), msg1,
+                                  curses.color_pair(self.COLOR_WARNING) | curses.A_BOLD)
+            if h >= 2:
+                self._safe_addstr(1, max(0, (w - len(msg2)) // 2), msg2,
+                                  curses.color_pair(self.COLOR_GRAY))
+            self.stdscr.refresh()
+        except curses.error:
+            pass
 
     def _curses_main(self, stdscr):
         self.stdscr = stdscr
-        curses.curs_set(0)  # Hide cursor
+        try:
+            curses.curs_set(0)  # Hide cursor
+        except curses.error:
+            pass
         stdscr.keypad(True)
-        curses.start_color()
-        curses.use_default_colors()
-        
-        # Initialize colors
-        curses.init_pair(self.COLOR_PRIMARY, curses.COLOR_BLUE, -1)
-        curses.init_pair(self.COLOR_SUCCESS, curses.COLOR_GREEN, -1)
-        curses.init_pair(self.COLOR_WARNING, curses.COLOR_YELLOW, -1)
-        curses.init_pair(self.COLOR_DANGER, curses.COLOR_RED, -1)
-        curses.init_pair(self.COLOR_INFO, curses.COLOR_CYAN, -1)
-        curses.init_pair(self.COLOR_ACCENT, curses.COLOR_MAGENTA, -1)
-        curses.init_pair(self.COLOR_GRAY, curses.COLOR_BLACK, -1)
+        try:
+            curses.start_color()
+            curses.use_default_colors()
 
-        # Main TUI Loop
+            # Initialize colors
+            curses.init_pair(self.COLOR_PRIMARY, curses.COLOR_BLUE, -1)
+            curses.init_pair(self.COLOR_SUCCESS, curses.COLOR_GREEN, -1)
+            curses.init_pair(self.COLOR_WARNING, curses.COLOR_YELLOW, -1)
+            curses.init_pair(self.COLOR_DANGER, curses.COLOR_RED, -1)
+            curses.init_pair(self.COLOR_INFO, curses.COLOR_CYAN, -1)
+            curses.init_pair(self.COLOR_ACCENT, curses.COLOR_MAGENTA, -1)
+            curses.init_pair(self.COLOR_GRAY, curses.COLOR_BLACK, -1)
+        except curses.error:
+            # Color init can fail on very small / monochrome terminals; the
+            # TUI still works in plain attributes.
+            pass
+
+        # Main TUI Loop — guarded against transient curses.error during resize.
         current_screen = "home"
-        
+
         while True:
-            stdscr.clear()
-            
-            if current_screen == "home":
-                next_screen = self._draw_home()
-            elif current_screen == "analyzer":
-                next_screen = self._draw_analyzer()
-            elif current_screen == "status":
-                next_screen = self._draw_status()
-            else:
-                next_screen = "home"
-                
-            if next_screen == "quit":
-                break
-            current_screen = next_screen
+            try:
+                stdscr.clear()
+
+                if self._too_small():
+                    self._draw_too_small()
+                    key = stdscr.getch()
+                    if key in (ord('q'), ord('Q'), 27):
+                        break
+                    # Any other key (including KEY_RESIZE) → redraw
+                    continue
+
+                if current_screen == "home":
+                    next_screen = self._draw_home()
+                elif current_screen == "analyzer":
+                    next_screen = self._draw_analyzer()
+                elif current_screen == "status":
+                    next_screen = self._draw_status()
+                else:
+                    next_screen = "home"
+
+                if next_screen == "quit":
+                    break
+                current_screen = next_screen
+            except curses.error:
+                # Resize race: clear and retry the same screen on the next tick.
+                # This is the cure for TS08_TC_12 — rapid resize no longer
+                # crashes the TUI back to the shell.
+                try:
+                    stdscr.clear()
+                    stdscr.refresh()
+                except curses.error:
+                    pass
+                continue
 
     def _draw_home(self) -> str:
         """Draw the main menu / dashboard home screen."""
         h, w = self.stdscr.getmaxyx()
-        
+
         # Display Gemini-inspired block banner
         banner_lines = [
             r"      _ _    _           _                   ",
@@ -104,20 +198,23 @@ class JhadooTUI:
             r"| |__| | |  | | (_| | (_| | |) | (_) | (_) |  ",
             r" \____/|_|  |_|\__,_|\__,_|_.__/ \___/ \___/   "
         ]
-        
+
         start_y = 2
         for i, line in enumerate(banner_lines):
             color = self.COLOR_PRIMARY if i < 3 else self.COLOR_ACCENT
-            self.stdscr.addstr(start_y + i, max(2, (w - len(line)) // 2), line, curses.color_pair(color) | curses.A_BOLD)
-            
+            self._safe_addstr(start_y + i, max(2, (w - len(line)) // 2), line,
+                              curses.color_pair(color) | curses.A_BOLD)
+
         # Draw subheaders
         sub_y = start_y + len(banner_lines) + 1
         sub_str = "✨ Auto-clean unused files & apps for a seamless vibe coding experience"
-        self.stdscr.addstr(sub_y, max(2, (w - len(sub_str)) // 2), sub_str, curses.color_pair(self.COLOR_SUCCESS))
-        
+        self._safe_addstr(sub_y, max(2, (w - len(sub_str)) // 2), sub_str,
+                          curses.color_pair(self.COLOR_SUCCESS))
+
         divider = "=" * min(w - 4, 60)
-        self.stdscr.addstr(sub_y + 2, max(2, (w - len(divider)) // 2), divider, curses.color_pair(self.COLOR_GRAY))
-        
+        self._safe_addstr(sub_y + 2, max(2, (w - len(divider)) // 2), divider,
+                          curses.color_pair(self.COLOR_GRAY))
+
         # Menu Options
         options = [
             ("A", "DaisyDisk-style Visual Disk Explorer & Analyzer"),
@@ -127,17 +224,26 @@ class JhadooTUI:
             ("U", "Deep Application Uninstaller & Leftover Sweeper"),
             ("Q", "Exit Jhadoo TUI")
         ]
-        
+
         menu_y = sub_y + 4
         for i, (key, desc) in enumerate(options):
-            self.stdscr.addstr(menu_y + i*2, max(4, (w - 60) // 2), f" [{key}] ", curses.color_pair(self.COLOR_INFO) | curses.A_BOLD)
-            self.stdscr.addstr(menu_y + i*2, max(4, (w - 60) // 2) + 7, desc)
-            
-        self.stdscr.refresh()
-        
-        # Handle inputs
+            self._safe_addstr(menu_y + i*2, max(4, (w - 60) // 2), f" [{key}] ",
+                              curses.color_pair(self.COLOR_INFO) | curses.A_BOLD)
+            self._safe_addstr(menu_y + i*2, max(4, (w - 60) // 2) + 7, desc)
+
+        try:
+            self.stdscr.refresh()
+        except curses.error:
+            pass
+
+        # Handle inputs — KEY_RESIZE triggers a redraw by returning the same screen
         while True:
-            key = self.stdscr.getch()
+            try:
+                key = self.stdscr.getch()
+            except curses.error:
+                return "home"
+            if key == curses.KEY_RESIZE:
+                return "home"
             if key in [ord('a'), ord('A')]:
                 return "analyzer"
             elif key in [ord('s'), ord('S')]:
@@ -156,22 +262,35 @@ class JhadooTUI:
 
     def _draw_analyzer(self) -> str:
         """Draw interactive recursive disk tree (DaisyDisk inspired TUI)."""
-        curses.curs_set(0)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
         h, w = self.stdscr.getmaxyx()
-        
+
         home_path = get_home_directory()
         current_path = home_path
-        
+
         # Active selection tracking
         selected_idx = 0
         scroll_offset = 0
-        
+
         while True:
-            self.stdscr.clear()
-            self.stdscr.addstr(1, 2, "📂 Jhadoo DaisyDisk-Style Visual Disk Analyzer", curses.color_pair(self.COLOR_PRIMARY) | curses.A_BOLD)
-            self.stdscr.addstr(2, 2, f"Active directory: {current_path}", curses.color_pair(self.COLOR_INFO))
-            self.stdscr.addstr(3, 2, "─" * (w - 4), curses.color_pair(self.COLOR_GRAY))
-            
+            try:
+                self.stdscr.clear()
+            except curses.error:
+                # Resize race — let the outer loop redraw on next tick
+                return "analyzer"
+
+            # Re-read dimensions on every frame so resize takes effect immediately
+            h, w = self.stdscr.getmaxyx()
+
+            self._safe_addstr(1, 2, "📂 Jhadoo DaisyDisk-Style Visual Disk Analyzer",
+                              curses.color_pair(self.COLOR_PRIMARY) | curses.A_BOLD)
+            self._safe_addstr(2, 2, f"Active directory: {current_path}",
+                              curses.color_pair(self.COLOR_INFO))
+            self._safe_addstr(3, 2, "─" * (w - 4), curses.color_pair(self.COLOR_GRAY))
+
             # Read items safely
             items = []
             try:
@@ -185,7 +304,7 @@ class JhadooTUI:
                         elif entry.is_dir(follow_symlinks=False):
                             # Fast size estimate or lazy computed size (show folder for now)
                             size = 0  # We will do a safe stat or let it load
-                        
+
                         items.append({
                             "name": entry.name,
                             "path": entry.path,
@@ -199,50 +318,60 @@ class JhadooTUI:
 
             # Sort: Folders first, then files (descending by size/alphabetical)
             items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
-            
+
             # Constrain indices
             if selected_idx >= len(items):
                 selected_idx = max(0, len(items) - 1)
-                
-            # Render item window
-            max_rows = h - 8
+
+            # Render item window — bound max_rows to current height
+            max_rows = max(1, h - 8)
             visible_items = items[scroll_offset:scroll_offset + max_rows]
-            
+
             # Render items
             for i, item in enumerate(visible_items):
                 actual_idx = scroll_offset + i
                 item_y = 4 + i
-                
+
                 # Highlighting
                 is_selected = (actual_idx == selected_idx)
                 attr = curses.A_REVERSE if is_selected else curses.A_NORMAL
-                
+
                 # Print icons
                 icon = "📁 " if item["is_dir"] else "📄 "
                 color = curses.color_pair(self.COLOR_INFO) if item["is_dir"] else curses.color_pair(self.COLOR_GRAY)
                 if is_selected:
                     color = curses.color_pair(self.COLOR_PRIMARY)
-                    
-                self.stdscr.addstr(item_y, 4, icon, color | attr)
-                
+
+                self._safe_addstr(item_y, 4, icon, color | attr)
+
                 # Name and size formatting
                 size_str = bytes_to_human_readable(item["size"]) if item["size"] > 0 else ("<DIR>" if item["is_dir"] else "0 B")
-                name_w = w - 25
+                name_w = max(10, w - 25)
                 name_display = item["name"][:name_w]
-                
-                self.stdscr.addstr(item_y, 8, f"{name_display:<{name_w}} | {size_str:>10s}", attr)
-                
+
+                self._safe_addstr(item_y, 8, f"{name_display:<{name_w}} | {size_str:>10s}", attr)
+
             # Render Controls / Help footer
             help_y = h - 3
             help_str = " [↑↓ / k/j] Navigate | [Enter] Drill Down | [Backspace / h] Up | [Space] Archive/Del | [Q] Home"
-            self.stdscr.addstr(help_y, 2, "─" * (w - 4), curses.color_pair(self.COLOR_GRAY))
-            self.stdscr.addstr(help_y + 1, 2, help_str, curses.color_pair(self.COLOR_SUCCESS) | curses.A_BOLD)
-            
-            self.stdscr.refresh()
-            
+            self._safe_addstr(help_y, 2, "─" * (w - 4), curses.color_pair(self.COLOR_GRAY))
+            self._safe_addstr(help_y + 1, 2, help_str,
+                              curses.color_pair(self.COLOR_SUCCESS) | curses.A_BOLD)
+
+            try:
+                self.stdscr.refresh()
+            except curses.error:
+                pass
+
             # Get Key
-            key = self.stdscr.getch()
-            
+            try:
+                key = self.stdscr.getch()
+            except curses.error:
+                return "analyzer"
+
+            if key == curses.KEY_RESIZE:
+                # Force a redraw on the next frame; keep current selection
+                continue
             if key in [curses.KEY_UP, ord('k'), ord('K')]:
                 if selected_idx > 0:
                     selected_idx -= 1
@@ -274,65 +403,117 @@ class JhadooTUI:
 
     def _draw_status(self) -> str:
         """Draw real-time hardware status metrics (iStat Menus inspired)."""
-        curses.curs_set(0)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
         self.stdscr.nodelay(True)  # Non-blocking getch
-        
+
+        # Live metrics sampler — uses psutil if available, else stdlib fallback.
+        # Falls back to None per-metric, which we render as "[SIMULATED]".
+        from .metrics import SystemMetrics
+        metrics = SystemMetrics()
+
         while True:
-            self.stdscr.clear()
+            try:
+                self.stdscr.clear()
+            except curses.error:
+                return "status"
             h, w = self.stdscr.getmaxyx()
-            
-            self.stdscr.addstr(1, 2, "⚡ Jhadoo iStat-Style Live System Telemetry Dashboard", curses.color_pair(self.COLOR_ACCENT) | curses.A_BOLD)
-            self.stdscr.addstr(2, 2, "Press [Q] or [Esc] to return to Home Menu", curses.color_pair(self.COLOR_GRAY))
-            self.stdscr.addstr(3, 2, "─" * (w - 4), curses.color_pair(self.COLOR_GRAY))
-            
-            # Simple mock CPU/Memory/Network values that recalculate to show live metrics safely
-            import random
-            cpu_val = random.randint(10, 45)
-            mem_val = random.randint(40, 75)
-            disk_read = random.uniform(1.2, 5.8)
-            disk_write = random.uniform(5.4, 22.1)
-            net_down = random.uniform(0.5, 3.4)
-            net_up = random.uniform(0.1, 1.2)
-            
+
+            self._safe_addstr(1, 2, "⚡ Jhadoo iStat-Style Live System Telemetry Dashboard",
+                              curses.color_pair(self.COLOR_ACCENT) | curses.A_BOLD)
+            self._safe_addstr(2, 2, "Press [Q] or [Esc] to return to Home Menu",
+                              curses.color_pair(self.COLOR_GRAY))
+            self._safe_addstr(3, 2, "─" * (w - 4), curses.color_pair(self.COLOR_GRAY))
+
+            # Live metrics — each call returns a float or None (then we mark SIMULATED)
+            cpu_val = metrics.cpu_percent()
+            mem_val = metrics.memory_percent()
+            disk_read, disk_write = metrics.disk_io_per_second()
+            net_down, net_up = metrics.net_io_per_second()
+
             # Hardware info
             import platform
             arch = platform.machine()
             proc_desc = platform.processor() or "Multi-Core CPU"
-            
-            # Print CPU
+
+            # CPU row
             cpu_y = 5
-            self.stdscr.addstr(cpu_y, 4, "⚙ CPU Utilization", curses.color_pair(self.COLOR_PRIMARY) | curses.A_BOLD)
-            cpu_filled = int((w - 30) * cpu_val / 100)
-            cpu_bar = "█" * cpu_filled + "░" * ((w - 30) - cpu_filled)
-            self.stdscr.addstr(cpu_y + 1, 4, f"   Load: |{cpu_bar}| {cpu_val}%")
-            self.stdscr.addstr(cpu_y + 2, 4, f"   Arch: {arch}  |  Processor: {proc_desc[:50]}")
-            
-            # Print Memory
+            cpu_label = "⚙ CPU Utilization"
+            if cpu_val is None:
+                cpu_label += "  [SIMULATED]"
+                import random as _r
+                cpu_val = _r.randint(10, 45)
+            self._safe_addstr(cpu_y, 4, cpu_label,
+                              curses.color_pair(self.COLOR_PRIMARY) | curses.A_BOLD)
+            bar_width = max(10, w - 30)
+            cpu_filled = int(bar_width * cpu_val / 100)
+            cpu_bar = "█" * cpu_filled + "░" * (bar_width - cpu_filled)
+            self._safe_addstr(cpu_y + 1, 4, f"   Load: |{cpu_bar}| {cpu_val:.1f}%")
+            self._safe_addstr(cpu_y + 2, 4, f"   Arch: {arch}  |  Processor: {proc_desc[:50]}")
+
+            # Memory row
             mem_y = 9
-            self.stdscr.addstr(mem_y, 4, "▦ Memory Utilization", curses.color_pair(self.COLOR_SUCCESS) | curses.A_BOLD)
-            mem_filled = int((w - 30) * mem_val / 100)
-            mem_bar = "█" * mem_filled + "░" * ((w - 30) - mem_filled)
-            self.stdscr.addstr(mem_y + 1, 4, f"   Used: |{mem_bar}| {mem_val}%")
-            
-            # Print Disk & Network I/O
+            mem_label = "▦ Memory Utilization"
+            if mem_val is None:
+                mem_label += "  [SIMULATED]"
+                import random as _r2
+                mem_val = _r2.randint(40, 75)
+            self._safe_addstr(mem_y, 4, mem_label,
+                              curses.color_pair(self.COLOR_SUCCESS) | curses.A_BOLD)
+            mem_filled = int(bar_width * mem_val / 100)
+            mem_bar = "█" * mem_filled + "░" * (bar_width - mem_filled)
+            self._safe_addstr(mem_y + 1, 4, f"   Used: |{mem_bar}| {mem_val:.1f}%")
+
+            # Disk & Network I/O row
             io_y = 13
-            self.stdscr.addstr(io_y, 4, "▤ Storage & Network Throughput", curses.color_pair(self.COLOR_INFO) | curses.A_BOLD)
-            self.stdscr.addstr(io_y + 1, 4, f"   Disk Read:  ▮▯▯▯▯  {disk_read:.2f} MB/s   |  Disk Write: ▮▮▮▯▯  {disk_write:.2f} MB/s")
-            self.stdscr.addstr(io_y + 2, 4, f"   Network DL: ▁▁█▂▁  {net_down:.2f} MB/s   |  Network UL: ▄▄▄▃▃  {net_up:.2f} MB/s")
-            
+            io_label = "▤ Storage & Network Throughput"
+            if disk_read is None or disk_write is None:
+                io_label += "  [SIMULATED]"
+                import random as _r3
+                disk_read = _r3.uniform(1.2, 5.8)
+                disk_write = _r3.uniform(5.4, 22.1)
+            if net_down is None or net_up is None:
+                # label already flagged if disk was simulated; flag net separately
+                if disk_read is not None and disk_write is not None:
+                    io_label += "  [NET SIMULATED]"
+                import random as _r4
+                net_down = _r4.uniform(0.5, 3.4)
+                net_up = _r4.uniform(0.1, 1.2)
+            self._safe_addstr(io_y, 4, io_label,
+                              curses.color_pair(self.COLOR_INFO) | curses.A_BOLD)
+            self._safe_addstr(io_y + 1, 4,
+                              f"   Disk Read:  ▮▯▯▯▯  {disk_read:.2f} MB/s   |  Disk Write: ▮▮▮▯▯  {disk_write:.2f} MB/s")
+            self._safe_addstr(io_y + 2, 4,
+                              f"   Network DL: ▁▁█▂▁  {net_down:.2f} MB/s   |  Network UL: ▄▄▄▃▃  {net_up:.2f} MB/s")
+
             # Print dynamically computed health score
-            health_score = max(50, 100 - (cpu_val // 2) - ((mem_val - 40) // 3))
+            health_score = max(50, 100 - (int(cpu_val) // 2) - ((int(mem_val) - 40) // 3))
             health_color = self.COLOR_SUCCESS if health_score > 80 else (self.COLOR_WARNING if health_score > 60 else self.COLOR_DANGER)
-            
-            self.stdscr.addstr(h - 4, 4, f"🎯 Dynamic System Health Index Score:  ● {health_score} ", curses.color_pair(health_color) | curses.A_BOLD)
-            
-            self.stdscr.refresh()
-            
+
+            self._safe_addstr(h - 4, 4, f"🎯 Dynamic System Health Index Score:  ● {health_score} ",
+                              curses.color_pair(health_color) | curses.A_BOLD)
+
+            try:
+                self.stdscr.refresh()
+            except curses.error:
+                pass
+
             # Sleep 1 second non-blocking key check
             time.sleep(1.0)
-            key = self.stdscr.getch()
+            try:
+                key = self.stdscr.getch()
+            except curses.error:
+                key = -1
+            if key == curses.KEY_RESIZE:
+                # Just loop and redraw with the new dimensions
+                continue
             if key in [ord('q'), ord('Q'), 27]:
-                self.stdscr.nodelay(False)  # Restore blocking getch
+                try:
+                    self.stdscr.nodelay(False)  # Restore blocking getch
+                except curses.error:
+                    pass
                 return "home"
 
     def _run_subutility_tui(self, sub_type: str):

@@ -74,7 +74,16 @@ def _parent_has_js_project(parent: str) -> bool:
 
 
 def _is_js_dependency_tree(path: str, parent: str) -> bool:
-    """Detect renamed npm/pnpm dependency trees (e.g. js_deps instead of node_modules)."""
+    """Detect renamed npm/pnpm dependency trees (e.g. js_deps instead of node_modules).
+
+    Heuristics (any one match is sufficient), in priority order:
+      1. Contains `.bin/` or `.pnpm/` subdirectory (npm/pnpm internal layout).
+      2. Contains a `@`-scoped subdirectory (e.g. `@types`, `@babel`).
+      3. Contains a `.package-lock.json` file (npm internal marker written on install).
+      4. Contains ≥2 subdirectories each having their own `package.json` (canonical
+         npm per-package layout). The ≥2 threshold avoids false positives on a
+         single vendored package placed under a generic folder name.
+    """
     if not _parent_has_js_project(parent):
         return False
     try:
@@ -82,9 +91,26 @@ def _is_js_dependency_tree(path: str, parent: str) -> bool:
             return True
         if os.path.isdir(os.path.join(path, ".pnpm")):
             return True
+        if os.path.isfile(os.path.join(path, ".package-lock.json")):
+            return True
+        package_json_count = 0
+        scanned = 0
         for entry in os.scandir(path):
-            if entry.is_dir(follow_symlinks=False) and entry.name.startswith("@"):
+            scanned += 1
+            if scanned > 200:
+                # Bound the scan for very large dep trees; we only need ≥2 hits.
+                break
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            if entry.name.startswith("@"):
                 return True
+            try:
+                if os.path.isfile(os.path.join(entry.path, "package.json")):
+                    package_json_count += 1
+                    if package_json_count >= 2:
+                        return True
+            except OSError:
+                continue
     except OSError:
         pass
     return False

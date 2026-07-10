@@ -2,6 +2,7 @@
 
 # Optional dependencies
 win10toast>=0.9; platform_system=="Windows"  # For Windows notifications
+# psutil>=5.9  # Optional: enables live TUI telemetry. Install with `pip install jhadoo[metrics]`
 
 # Development dependencies
 pytest>=7.0

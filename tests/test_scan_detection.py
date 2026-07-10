@@ -73,6 +73,51 @@ class TestSignatureDetection(unittest.TestCase):
                 f.write("{}")
             self.assertTrue(_is_js_dependency_tree(deps, project))
 
+    # --- TS04_TC_27: broadened heuristics ---
+
+    def test_is_js_dependency_tree_package_lock_marker(self):
+        """A renamed js_deps containing only .package-lock.json (no .bin/.pnpm/@)
+        must still be detected as an npm dependency tree."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = os.path.join(tmp, "project")
+            deps = os.path.join(project, "js_deps")
+            os.makedirs(deps)
+            with open(os.path.join(deps, ".package-lock.json"), "w", encoding="utf-8") as f:
+                f.write('{"lockfileVersion": 3}\n')
+            with open(os.path.join(project, "package.json"), "w", encoding="utf-8") as f:
+                f.write("{}")
+            self.assertTrue(_is_js_dependency_tree(deps, project))
+
+    def test_is_js_dependency_tree_multi_subdir_with_package_json(self):
+        """A renamed js_deps containing ≥2 subdirs each with a package.json
+        (canonical npm per-package layout) must be detected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = os.path.join(tmp, "project")
+            deps = os.path.join(project, "js_deps")
+            os.makedirs(os.path.join(deps, "lodash"))
+            os.makedirs(os.path.join(deps, "chalk"))
+            with open(os.path.join(deps, "lodash", "package.json"), "w", encoding="utf-8") as f:
+                f.write('{"name": "lodash"}\n')
+            with open(os.path.join(deps, "chalk", "package.json"), "w", encoding="utf-8") as f:
+                f.write('{"name": "chalk"}\n')
+            with open(os.path.join(project, "package.json"), "w", encoding="utf-8") as f:
+                f.write("{}")
+            self.assertTrue(_is_js_dependency_tree(deps, project))
+
+    def test_is_js_dependency_tree_single_subdir_no_match(self):
+        """A single subdir with package.json (≥2 threshold not met) without
+        other markers should not be detected, to avoid false positives on a
+        single vendored package placed under a generic folder name."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = os.path.join(tmp, "project")
+            deps = os.path.join(project, "vendor")
+            os.makedirs(os.path.join(deps, "only-pkg"))
+            with open(os.path.join(deps, "only-pkg", "package.json"), "w", encoding="utf-8") as f:
+                f.write('{"name": "only-pkg"}\n')
+            with open(os.path.join(project, "package.json"), "w", encoding="utf-8") as f:
+                f.write("{}")
+            self.assertFalse(_is_js_dependency_tree(deps, project))
+
 
 class TestTargetScanning(unittest.TestCase):
 

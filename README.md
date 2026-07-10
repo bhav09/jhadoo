@@ -131,13 +131,25 @@ jhadoo --archive --test-delay 10 --config /path/to/test-config.json
 Point the config `main_folder` at a small stale test project. Expect exit code `130` and a partial deletion manifest.
 
 ### PyPI old versions
-Only the latest 3 PyPI releases should remain installable by default. Verify with:
+
+Jhadoo follows a **rolling retention policy**: only the latest 3 PyPI releases are kept installable by default. Older versions are yanked on a best-effort basis.
+
+Verify the current yank state:
 
 ```bash
 python scripts/yank_old_pypi_versions.py --verify-only --keep 3
 ```
 
-Explicit pins like `pip install jhadoo==1.2.0` may still work for yanked releases (PEP 592). See `docs/QA.md` for the full QA matrix.
+**Why explicit `pip install jhadoo==1.2.0` may still succeed (and why that's not a Jhadoo bug):**
+
+Per [PEP 592](https://peps.python.org/pep-0592/), "yanked" releases on PyPI are only hidden from *default* resolution. An explicit pin (`==1.2.0`) will still install a yanked file — pip prints a warning but proceeds. The only way to fully block installation of an old version is to delete the release on PyPI within 72 hours of upload, after which deletion is permanently disallowed by PyPI policy. There is no programmatic API to yank or delete releases on PyPI; maintainers must do this manually via the PyPI web UI at <https://pypi.org/manage/project/jhadoo/releases/>.
+
+The expected behaviour that **is** enforced:
+
+* `pip install jhadoo` → resolves to the latest non-yanked release (always within the last 3).
+* `pip install -U jhadoo` → never crosses a yanked version boundary.
+
+If `--verify-only` reports older versions as still active, the maintainer has not yet yanked them in the PyPI UI — please open an issue at <https://github.com/bhav09/jhadoo/issues> so we can complete the manual yank.
 
 ## License
 

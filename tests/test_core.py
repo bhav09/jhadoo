@@ -1,6 +1,8 @@
 """Tests for CleanupEngine core logic."""
 
+import os
 import unittest
+import tempfile
 from unittest.mock import patch, MagicMock
 import logging
 from jhadoo.config import Config
@@ -72,28 +74,97 @@ class TestCleanupEngineCore(unittest.TestCase):
     def test_cleanup_keyboard_interrupt(self, mock_as_completed):
         # Force KeyboardInterrupt when iterating futures
         mock_as_completed.side_effect = KeyboardInterrupt()
-        
+
         config = Config()
         engine = CleanupEngine(config, dry_run=False)
-        
+
         # Mock scan to return candidates
         with patch.object(engine, '_scan_all_targets', return_value=[{"path": "/some/path", "size": 1000 * 1024 * 1024}]), \
              patch('sys.stdin.isatty', return_value=True), \
              patch('jhadoo.core.confirm_deletion', return_value=True), \
              patch('jhadoo.core.logger.warning') as mock_warning, \
              patch.object(engine, 'save_deletion_manifest') as mock_save_manifest:
-            
+
             result = engine.run()
-            
+
             self.assertFalse(result["success"])
             self.assertTrue(result.get("interrupted"))
-            
+
             # Verify that interrupt warning was logged
             warning_calls = [call[0][0] for call in mock_warning.call_args_list if len(call[0]) > 0]
             has_interrupt_msg = any("Interrupted by user" in str(msg) for msg in warning_calls)
             self.assertTrue(has_interrupt_msg)
-            
+
             # Verify that manifest save was attempted
             mock_save_manifest.assert_called_once()
 
+    @patch('jhadoo.core.validate_path_safety', return_value=(True, ""))
+    @patch('shutil.disk_usage')
+    def test_cleanup_targets_skips_archive_when_disk_full(
+        self, mock_disk_usage, _mock_safe
+    ):
+        """TS05_TC_10: end-to-end archive flow must skip items gracefully when
+        the archive volume reports insufficient free space.
+
+        This replaces the tester's blocked manual 99 GB dummy-file simulation
+        with a mock-driven test that exercises the real cleanup_targets() →
+        delete_or_archive_item() code path through a stubbed ThreadPoolExecutor.
+        """
+        mock_disk_usage.return_value = MagicMock(free=100)  # 100 bytes free
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "target")
+            os.makedirs(src)
+            with open(os.path.join(src, "file.txt"), "w", encoding="utf-8") as f:
+                f.write("x" * 1000)
+
+            config = Config()
+            config.set("main_folder", tmp)
+            config.set("safety", {
+                "archive_folder": os.path.join(tmp, "archive"),
+                "require_confirmation_above_mb": 0,  # below threshold → no prompt
+            })
+            engine = CleanupEngine(config, dry_run=False, archive_mode=True)
+
+            candidates = [{"path": src, "size": 5000, "type": "folder", "target_name": "venv"}]
+
+            # Stub the pool so the submitted future runs the real
+            # delete_or_archive_item synchronously and returns its result.
+            class _StubFut:
+                def __init__(self, fn, item):
+                    self._result = fn(item)
+                    self._done = True
+                def result(self):
+                    return self._result
+                def cancel(self):
+                    return False
+                def cancelled(self):
+                    return False
+
+            class _StubPool:
+                def __enter__(self):
+                    return self
+                def __exit__(self, *a):
+                    return False
+                def submit(self, fn, item):
+                    return _StubFut(fn, item)
+
+            with patch.object(engine, '_scan_all_targets', return_value=candidates), \
+                 patch('jhadoo.core.ThreadPoolExecutor', return_value=_StubPool()), \
+                 patch('jhadoo.core.as_completed', side_effect=lambda fs: list(fs)), \
+                 patch('jhadoo.core.ProgressBar'), \
+                 patch('jhadoo.core.logger.error') as mock_error:
+                engine.cleanup_targets()
+
+            # The disk-usage guard should have emitted an "Insufficient disk space" error
+            error_calls = [str(c[0][0]) for c in mock_error.call_args_list if c[0]]
+            self.assertTrue(
+                any("Insufficient disk space" in m for m in error_calls),
+                f"Expected 'Insufficient disk space' in errors, got: {error_calls}",
+            )
+            # Source path is preserved (not moved/deleted) because the guard returned False
+            self.assertTrue(os.path.exists(src))
+            # No bytes were freed
+            self.assertEqual(engine.stats["folders_size"], 0)
+            self.assertEqual(engine.stats["folders_deleted"], 0)
 

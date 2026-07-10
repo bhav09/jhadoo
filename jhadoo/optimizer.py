@@ -65,7 +65,7 @@ class SystemOptimizer:
                 output = "macOS DNS cache flushed successfully."
             elif success_dscache:
                 success = True  # Grade dscacheutil success as overall success with a note
-                output = "macOS DNS cache flushed partially (dscacheutil succeeded, but mDNSResponder reload failed: process not owned by you or requires sudo)."
+                output = "flushed partially (dscacheutil succeeded, but mDNSResponder reload failed: process not owned by you or requires sudo). Run: sudo killall -HUP mDNSResponder"
             else:
                 output = f"Failed to flush macOS DNS: {'; '.join(errors)}"
 
@@ -104,7 +104,14 @@ class SystemOptimizer:
                 output = "No compatible DNS resolver (systemd-resolved) found to flush."
 
         if success:
-            logger.info(f"   ✓ {output}")
+            # Partial-success messages start with "flushed partially" — flag
+            # them with a warning icon so the user notices that mDNSResponder
+            # reload did not complete (TS02_TC_07), but keep them at info level
+            # so the overall `success=True` contract is preserved.
+            if output.startswith("flushed partially"):
+                logger.info(f"   ⚠️  {output}")
+            else:
+                logger.info(f"   ✓ {output}")
             self.stats["tasks_completed"].append("Flush DNS")
         else:
             logger.warning(f"   ⚠️  Could not flush DNS: {output}")

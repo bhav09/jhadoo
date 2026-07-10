@@ -31,7 +31,7 @@ class TestSystemOptimizer(unittest.TestCase):
     def test_flush_dns_macos_partial_success(self, mock_run, mock_get_system):
         mock_get_system.return_value = "darwin"
         self.optimizer.system = "darwin"
-        
+
         # Mock dscacheutil to succeed, killall to fail
         def run_side_effect(cmd, *args, **kwargs):
             if "dscacheutil" in cmd:
@@ -39,16 +39,26 @@ class TestSystemOptimizer(unittest.TestCase):
             elif "killall" in cmd:
                 return MagicMock(returncode=1, stdout="", stderr="No matching processes belonging to you were found")
             return MagicMock(returncode=1, stdout="", stderr="")
-            
+
         mock_run.side_effect = run_side_effect
-        
-        success, output = self.optimizer.flush_dns()
-        
-        self.assertTrue(success)
-        self.assertIn("flushed partially", output)
-        self.assertIn("mDNSResponder reload failed", output)
-        self.assertEqual(mock_run.call_count, 2)
-        self.assertIn("Flush DNS", self.optimizer.stats["tasks_completed"])
+
+        with patch('jhadoo.optimizer.logger.info') as mock_info:
+            success, output = self.optimizer.flush_dns()
+
+            self.assertTrue(success)
+            self.assertIn("flushed partially", output)
+            self.assertIn("mDNSResponder reload failed", output)
+            self.assertEqual(mock_run.call_count, 2)
+            self.assertIn("Flush DNS", self.optimizer.stats["tasks_completed"])
+
+            # TS02_TC_07: partial-success must be logged with a ⚠️ prefix at
+            # info level so users notice mDNSResponder reload did not complete.
+            info_calls = [str(c[0][0]) for c in mock_info.call_args_list if c[0]]
+            has_warn_icon = any("⚠️" in m and "flushed partially" in m for m in info_calls)
+            self.assertTrue(
+                has_warn_icon,
+                f"Expected ⚠️ prefix on partial-success log, got: {info_calls}",
+            )
 
     @patch('jhadoo.optimizer.get_system')
     @patch('subprocess.run')

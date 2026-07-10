@@ -243,14 +243,26 @@ class AppUninstaller:
                                             p = os.path.join(root, f)
                                             size += os.path.getsize(p)
                                         except: pass
-                            
-                            remnants.append({
+
+                            remnant = {
                                 "path": entry_path,
                                 "name": entry.name,
                                 "size": size,
                                 "type": "folder" if entry.is_dir(follow_symlinks=False) else "file",
                                 "source": os.path.basename(hub)
-                            })
+                            }
+                            # Tag macOS-sandboxed remnants so clean_remnants can
+                            # surface a clearer message when the kernel refuses
+                            # the delete (TS07_TC_01). We check both the parent
+                            # dir name (cheap, common case) and the full
+                            # Library/Containers path segment (defensive).
+                            if self.system == "darwin":
+                                parent_name = os.path.basename(os.path.dirname(entry_path))
+                                normalized = os.path.normpath(entry_path)
+                                if parent_name == "Containers" or \
+                                   f"{os.sep}Library{os.sep}Containers{os.sep}" in normalized + os.sep:
+                                    remnant["protected"] = "macos-sandbox"
+                            remnants.append(remnant)
                         except OSError:
                             pass
             except Exception as e:
@@ -274,10 +286,12 @@ class AppUninstaller:
 
         bytes_saved = 0
         successful = 0
+        sandbox_blocked = 0
         archive_root = self.config.get("safety", {}).get("archive_folder")
 
         for item in remnants:
             path = item["path"]
+            protected_reason = item.get("protected")
             try:
                 if self.archive_mode:
                     os.makedirs(archive_root, exist_ok=True)
@@ -292,14 +306,32 @@ class AppUninstaller:
                     else:
                         shutil.rmtree(path)
                     logger.info(f"   🗑️  Removed leftover: {item['name']} ({bytes_to_human_readable(item['size'])})")
-                
+
                 self.deleted_items.append(item)
                 successful += 1
                 bytes_saved += item["size"]
+            except PermissionError as e:
+                # macOS sandbox blocks deletion inside ~/Library/Containers
+                # even when the path is owned by the user. Surface a clear,
+                # actionable message instead of a bare exception traceback.
+                sandbox_blocked += 1
+                if protected_reason == "macos-sandbox":
+                    logger.warning(
+                        f"   🔒 macOS sandbox blocks deletion of {path}. "
+                        f"Run Jhadoo with sudo, or remove manually: rm -rf \"{path}\""
+                    )
+                else:
+                    logger.warning(
+                        f"   🔒 Permission denied for {item['name']}: {e}. "
+                        f"Run Jhadoo with sudo, or remove manually: rm -rf \"{path}\""
+                    )
             except Exception as e:
                 logger.error(f"   ❌ Failed to remove {item['name']}: {e}")
 
-        logger.info(f"\n✓ Successfully removed {successful}/{len(remnants)} remnants ({bytes_to_human_readable(bytes_saved)} freed).")
+        summary = f"\n✓ Successfully removed {successful}/{len(remnants)} remnants ({bytes_to_human_readable(bytes_saved)} freed)."
+        if sandbox_blocked:
+            summary += f" {sandbox_blocked} blocked by macOS sandbox — see warnings above."
+        logger.info(summary)
         return bytes_saved
 
     def run_cli_flow(self, query: str = ""):
@@ -396,7 +428,8 @@ class AppUninstaller:
         total_size = sum(item["size"] for item in remnants)
         logger.info(f"\n🔍 Found {len(remnants)} leftover files and cache folders ({bytes_to_human_readable(total_size)}):")
         for i, item in enumerate(remnants):
-            logger.info(f"   {i+1:2d}. {item['name']:40s} | {bytes_to_human_readable(item['size']):10s} | Hub: {item['source']}")
+            lock_icon = " 🔒" if item.get("protected") == "macos-sandbox" else ""
+            logger.info(f"   {i+1:2d}. {item['name']:40s} | {bytes_to_human_readable(item['size']):10s} | Hub: {item['source']}{lock_icon}")
 
         if self.dry_run:
             logger.info(f"\n[Dry Run] Total would delete: {bytes_to_human_readable(total_size)}")
